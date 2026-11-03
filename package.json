@@ -1,0 +1,39 @@
+{
+  "name": "stl-articulator",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "prove": "npx tsx scripts/prove-joint.mts",
+    "prove:limbs": "npx tsx scripts/prove-dag-limbs.mts",
+    "prove:tolerance": "npx tsx scripts/prove-tolerance.mts",
+    "prove:quick": "npx tsx scripts/prove-quick.mts",
+    "prove:visual": "npx tsx scripts/prove-visual-joints.mts",
+    "prove:all": "npx tsx scripts/prove-tolerance.mts && npx tsx scripts/prove-visual-joints.mts"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.2",
+    "@types/three": "^0.187.0",
+    "fflate": "^0.8.3",
+    "manifold-3d": "^3.5.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "three": "^0.187.0",
+    "three-bvh-csg": "^0.0.18",
+    "three-mesh-bvh": "^0.9.17"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "oxlint": "^1.89.0",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.5"
+  }
+}
