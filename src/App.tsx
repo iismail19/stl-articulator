@@ -6,6 +6,7 @@ import { cutAndSplitModel, cutJointsFromModel } from './lib/booleanCut'
 import { createBallHardwareGeometry } from './lib/ballHardware'
 import {
   DEFAULT_FILAMENT,
+  FILAMENT_PROFILES,
   getFilamentProfile,
 } from './lib/filamentProfiles'
 import { applyJointTransform, createCutterGeometry } from './lib/cutterGeometry'
@@ -103,8 +104,9 @@ export default function App() {
   const [filament, setFilament] = useState<FilamentType>(() => {
     try {
       const saved = localStorage.getItem('stl-articulator-filament')
-      if (saved === 'pla' || saved === 'pla_plus' || saved === 'petg' || saved === 'abs' || saved === 'tpu') {
-        return saved
+      if (saved && Object.hasOwn(FILAMENT_PROFILES, saved)) {
+        const id = saved as FilamentType
+        if (FILAMENT_PROFILES[id].tested) return id
       }
     } catch {
       /* ignore */

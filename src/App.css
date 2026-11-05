@@ -459,6 +459,14 @@ fieldset.field {
   flex-wrap: wrap;
 }
 
+.filament-row .axis-btn:disabled {
+  opacity: 0.38;
+  color: #64748b;
+  background: #0f172a;
+  border-color: #1e293b;
+  cursor: not-allowed;
+}
+
 .filament-hint {
   margin: 0.45rem 0 0;
   font-size: 0.78rem;

@@ -24,7 +24,7 @@ const maxScale = Math.min(3.2, (modelSize * 0.16) / baseRadius)
 const joints = JSON.parse(fs.readFileSync(process.argv[2] ?? '/tmp/joints4.json', 'utf8')) as Joint[]
 ;(globalThis as { __ARTIC_DEBUG?: boolean }).__ARTIC_DEBUG = true
 const fitted = clampJointScales(refitJointsToLimbs(mesh, joints, baseRadius, modelSize), maxScale)
-const { parts, warnings, cut } = await cutAndSplitModel(geo, fitted, baseRadius, undefined, 'pla')
+const { parts, warnings, cut } = await cutAndSplitModel(geo, fitted, baseRadius, undefined, (process.env.FILAMENT ?? 'pla') as never)
 console.log(`parts=${parts.length}`)
 for (const w of warnings) console.log('WARN', w)
 cut.dispose()

@@ -1,9 +1,15 @@
 /**
- * Tiny PLA snap-fit test pair (ball+stem + socket block).
+ * Tiny PLA snap-fit test pairs (ball+stem + socket block).
  * Uses the same ballStemProfile + filamentProfiles as the app cuts.
  * Writes versioned STLs to public/test-joints/ (avoid browser cache).
  *
- *   npx tsx scripts/gen-pla-test-joint.mts
+ *   npx tsx scripts/gen-pla-test-joint.mts            # validated PLA
+ *   npx tsx scripts/gen-pla-test-joint.mts pla_plus  # any FilamentType id
+ *
+ * Two pairs per filament:
+ *   - Reference: Ø8 ball, straight — the pair the PLA fit was validated on.
+ *   - Small angled: Ø4 ball, joint face tilted like an elbow cut, printed
+ *     upright the way a limb prints. Cavity lead-in / slots match the model cut.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -17,18 +23,39 @@ import {
   midStemPlacement,
 } from '../src/lib/ballStemProfile.ts'
 import {
+  FILAMENT_PROFILES,
   getFilamentProfile,
-  PLA_VALIDATED,
   socketRadialDims,
+  type FilamentProfile,
 } from '../src/lib/filamentProfiles.ts'
+import type { FilamentType } from '../src/types.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const outDir = path.join(__dirname, '../public/test-joints')
 /** Bump when strength / snap geometry changes so browsers don't cache old STLs */
-const VERSION = 'v10'
+const VERSION = 'v12'
+/** Solid plastic kept around the cavity / under the stem — just enough to print and flex like a limb */
+const WALL = 1.6
+const FLOOR = 1.2
 
 type ManifoldApi = Awaited<ReturnType<typeof Module>>
-type Solid = ReturnType<ManifoldApi['Manifold']['sphere']>
+type ManifoldClass = ManifoldApi['Manifold']
+type Solid = ReturnType<ManifoldClass['sphere']>
+
+interface PairSpec {
+  /** File name part after the filament prefix, e.g. '' or '-d4-angled' */
+  tag: string
+  ballR: number
+  /** Joint axis tilt from vertical, degrees (0 = straight) */
+  tiltDeg: number
+  /** Use the model cut's lead-in and slot widths instead of the reference pair's */
+  matchModelCut: boolean
+}
+
+const PAIRS: PairSpec[] = [
+  { tag: '', ballR: 4, tiltDeg: 0, matchModelCut: false },
+  { tag: '-d4-angled', ballR: 2, tiltDeg: 22, matchModelCut: true },
+]
 
 function del(obj: { delete: () => void } | null | undefined) {
   try {
@@ -60,76 +87,62 @@ function writeStl(geo: THREE.BufferGeometry, file: string) {
   console.log('Wrote', file, `(${(fs.statSync(file).size / 1024).toFixed(1)} KB)`)
 }
 
-async function main() {
-  const wasm = await Module()
-  wasm.setup()
-  const { Manifold } = wasm
-  const filament = getFilamentProfile('pla')
-  const P = BALL_STEM
+/** Tilt about Y, then slice flat at zCut and drop onto the bed. */
+function tiltOntoBed(Manifold: ManifoldClass, solid: Solid, tiltDeg: number, zCut: number): Solid {
+  const tilted = solid.rotate([0, tiltDeg, 0])
+  const big = 1000
+  const keep = Manifold.cube([big, big, big], true).translate([0, 0, zCut + big / 2])
+  const cut = tilted.intersect(keep)
+  del(tilted)
+  del(keep)
+  const out = cut.translate([0, 0, -zCut])
+  del(cut)
+  return out
+}
 
-  // Ø8 mm ball — same proportions the app uses for a joint of world radius r
-  const ballR = 4
+function buildPair(Manifold: ManifoldClass, filament: FilamentProfile, spec: PairSpec) {
+  const P = BALL_STEM
+  const { ballR, tiltDeg, matchModelCut } = spec
+  const tilted = tiltDeg !== 0
+  const t = (tiltDeg * Math.PI) / 180
+
   const r = ballR / P.ballOfR
   const dims = computeBallStemDims(r)
-  const {
-    stemR,
-    stemH,
-    embed,
-    ballChamferH,
-    ballChamferWide,
-    ballChamferNarrow,
-    collarH,
-    stepH,
-  } = dims
+  const { stemR, stemH, embed, ballChamferH, ballChamferWide, ballChamferNarrow, collarH, stepH } =
+    dims
   const mid = midStemPlacement(dims)
-  // Same clearance as app cuts (PLA_VALIDATED — do not floor or loosen)
   const { socketR, mouthR } = socketRadialDims(ballR, filament)
   const flexSlots = filament.flexSlots
 
-  console.log('PLA test joint (mm) — matches app ballStemProfile + PLA_VALIDATED:', {
-    version: VERSION,
-    ballDiameter: ballR * 2,
+  console.log(`${filament.label} Ø${ballR * 2}${tilted ? ` tilted ${tiltDeg}°` : ''} (mm):`, {
     stemR: +stemR.toFixed(3),
     stemH: +stemH.toFixed(2),
-    midStemLen: +mid.len.toFixed(2),
-    ballChamferH: +ballChamferH.toFixed(2),
-    socketClearance: filament.socketClearance,
-    mouthR: +mouthR.toFixed(3),
-    mouthRatio: +(mouthR / ballR).toFixed(3),
+    gap: +(socketR - ballR).toFixed(3),
+    lip: +(ballR - mouthR).toFixed(3),
     flexSlots,
-    locked: PLA_VALIDATED,
   })
 
-  // ── Male: print base on bed, ball UP ──────────────────────────────
-  // App local axis: ball at −Z, body at +Z. Flip for print: ball at +Z.
-  const baseH = 5
-  const base = Manifold.cube([24, 24, baseH], true).translate([0, 0, baseH / 2])
+  // ── Male: base on bed, ball UP ─────────────────────────────────────
+  // Tilted: the base becomes a post that is sliced flat after tilting, so the
+  // joint face (post top) sits at tiltDeg like an angled limb cut.
+  const baseH = 2.5
+  const baseW = Math.max(tilted ? 8 : 12, stemR * P.collarWideOfStem * 2 + 2 * WALL)
+  const postDrop = tilted ? baseW * Math.tan(t) + 3 : 0
+  const base = Manifold.cube([baseW, baseW, baseH + postDrop], true).translate([
+    0,
+    0,
+    (baseH - postDrop) / 2,
+  ])
 
-  // Map app mid-stem (z0 → z0+len toward body) onto print Z (up toward ball)
-  // Print layout: base → collar/step → mid stem → ball chamfer → ball
   const ballZ = baseH + embed + stemH
   const ball = Manifold.sphere(ballR, 48).translate([0, 0, ballZ])
-
-  // Chamfer under ball: wide against sphere, narrow toward stem (down)
-  // App: cylinder(wide→narrow) from ballZ_app + start, growing +Z toward body
-  // Print: cylinder(narrow→wide) under ball, growing +Z toward ball
   const bChZ0 = ballZ - ballR * P.ballChamferStartOfBall - ballChamferH
-  const bCh = Manifold.cylinder(
-    ballChamferH,
-    ballChamferNarrow,
-    ballChamferWide,
-    40,
-    false,
-  ).translate([0, 0, bChZ0])
-
-  // Mid stem: same length as app; sit it so cones nearly meet
-  // App mid starts at chamferZ0 + chamferH*overlap (into the chamfer toward body)
-  // Print: mid top should enter the ball chamfer the same amount
+  const bCh = Manifold.cylinder(ballChamferH, ballChamferNarrow, ballChamferWide, 40, false).translate(
+    [0, 0, bChZ0],
+  )
   const stemTop = bChZ0 + ballChamferH * (1 - P.ballChamferOverlap)
   const stemZ0 = stemTop - mid.len
   const stem = Manifold.cylinder(mid.len, stemR, -1, 36, false).translate([0, 0, stemZ0])
-
-  // Body collar on the square — wide at base, tapers up to stem
   const collar = Manifold.cylinder(
     collarH,
     stemR * P.collarWideOfStem,
@@ -146,26 +159,23 @@ async function main() {
   ).translate([0, 0, baseH + collarH * 0.45])
 
   let male = Manifold.union([base, collar, step, stem, bCh, ball])
-  del(base)
-  del(collar)
-  del(step)
-  del(stem)
-  del(bCh)
-  del(ball)
+  for (const s of [base, collar, step, stem, bCh, ball]) del(s)
 
-  // ── Female socket (same ratios as createSocketCavity) ─────────────
-  const blockH = Math.max(stemH + socketR * 2.2, 18)
-  const block = Manifold.cube([26, 26, blockH], true).translate([0, 0, blockH / 2])
-  const seatZ = blockH - stemH
-  const socket = Manifold.sphere(socketR, 40).translate([0, 0, seatZ])
-  const wellBot = stemH + socketR * 0.25
-  const wellTop = blockH - seatZ + socketR * 0.8
-  const wellH = wellTop + wellBot
-  const mouth = Manifold.cylinder(wellH, mouthR, -1, 40, false).translate([
+  // ── Female socket ─────────────────────────────────────────────────
+  // Mouth runs only from the ball center up to the face (like the model cut) —
+  // no bore below the seat, so the ball bottoms out exactly where it belongs.
+  const seatZ = socketR + FLOOR
+  const blockH = seatZ + stemH
+  const blockW = 2 * (socketR * 1.12 + WALL)
+  const blockDrop = tilted ? blockW * Math.tan(t) + 3 : 0
+  const block = Manifold.cube([blockW, blockW, blockH + blockDrop], true).translate([
     0,
     0,
-    seatZ - wellBot,
+    (blockH - blockDrop) / 2,
   ])
+  const socket = Manifold.sphere(socketR, 40).translate([0, 0, seatZ])
+  const mouthH = stemH + socketR * 0.8
+  const mouth = Manifold.cylinder(mouthH, mouthR, -1, 40, false).translate([0, 0, seatZ])
   const throatH = Math.max(stemH * 0.45, ballR * 0.25)
   const throatR = Math.max(stemR * 1.35, mouthR * 0.55)
   const throat = Manifold.cylinder(throatH, throatR, -1, 28, false).translate([
@@ -173,23 +183,20 @@ async function main() {
     0,
     seatZ - throatH * 0.5,
   ])
-  const chamferH = Math.max(ballR * 0.4, 2.0)
+  const chamferH = matchModelCut ? Math.max(ballR * 0.4, r * 0.12) : Math.max(ballR * 0.4, 2.0)
   const lead = Manifold.cylinder(chamferH, mouthR, mouthR * 1.22, 40, false).translate([
     0,
     0,
     blockH - chamferH + 0.35,
   ])
   let cavity = Manifold.union([socket, mouth, throat, lead])
-  del(socket)
-  del(mouth)
-  del(throat)
-  del(lead)
+  for (const s of [socket, mouth, throat, lead]) del(s)
 
   if (flexSlots > 0) {
     const lipInner = mouthR * 0.15
     const lipOuter = socketR * 1.12
     const slotLen = Math.max(lipOuter - lipInner, ballR * 0.25)
-    const slotW = Math.max(ballR * 0.18, 0.6)
+    const slotW = matchModelCut ? Math.max(ballR * 0.18, 1e-4) : Math.max(ballR * 0.18, 0.6)
     const slotH = socketR * 1.5
     const radialMid = (lipInner + lipOuter) * 0.5
     for (let i = 0; i < flexSlots; i++) {
@@ -208,26 +215,59 @@ async function main() {
 
   let female = Manifold.difference(block, cavity)
   del(block)
+
+  if (tilted) {
+    // Slice under the lowest tilted top-face corner (male) / under the cavity (female)
+    const maleCut = baseH * Math.cos(t) - (baseW / 2) * Math.sin(t) - 1
+    const tiltedCavity = cavity.rotate([0, tiltDeg, 0])
+    const femaleCut = tiltedCavity.boundingBox().min[2] - FLOOR
+    del(tiltedCavity)
+    const m = tiltOntoBed(Manifold, male, tiltDeg, maleCut)
+    del(male)
+    male = m
+    const f = tiltOntoBed(Manifold, female, tiltDeg, femaleCut)
+    del(female)
+    female = f
+  }
   del(cavity)
 
+  const size = (s: Solid) => {
+    const b = s.boundingBox()
+    return [0, 1, 2].map((i) => (b.max[i] - b.min[i]).toFixed(1)).join(' × ')
+  }
+  console.log('  Print sizes (mm):', { ballPiece: size(male), socketBlock: size(female) })
+  return { male, female }
+}
+
+async function main() {
+  const wasm = await Module()
+  wasm.setup()
+  const { Manifold } = wasm
+  const filamentId = (process.argv[2] ?? 'pla') as FilamentType
+  if (!Object.hasOwn(FILAMENT_PROFILES, filamentId)) {
+    throw new Error(`Unknown filament "${filamentId}" — use one of: ${Object.keys(FILAMENT_PROFILES).join(', ')}`)
+  }
+  const filament = getFilamentProfile(filamentId)
+  const prefix = filamentId.replace('_', '-')
   fs.mkdirSync(outDir, { recursive: true })
 
-  const maleGeo = solidToGeo(male)
-  const femaleGeo = solidToGeo(female)
-  del(male)
-  del(female)
-
-  writeStl(maleGeo, path.join(outDir, `pla-ball-stem-${VERSION}.stl`))
-  writeStl(femaleGeo, path.join(outDir, `pla-socket-${VERSION}.stl`))
-  writeStl(maleGeo, path.join(outDir, 'pla-ball-stem.stl'))
-  writeStl(femaleGeo, path.join(outDir, 'pla-socket.stl'))
-  maleGeo.dispose()
-  femaleGeo.dispose()
-
+  for (const spec of PAIRS) {
+    const { male, female } = buildPair(Manifold, filament, spec)
+    const maleGeo = solidToGeo(male)
+    const femaleGeo = solidToGeo(female)
+    del(male)
+    del(female)
+    const name = `${prefix}${spec.tag}`
+    writeStl(maleGeo, path.join(outDir, `${name}-ball-stem-${VERSION}.stl`))
+    writeStl(femaleGeo, path.join(outDir, `${name}-socket-${VERSION}.stl`))
+    if (!spec.tag) {
+      writeStl(maleGeo, path.join(outDir, `${name}-ball-stem.stl`))
+      writeStl(femaleGeo, path.join(outDir, `${name}-socket.stl`))
+    }
+    maleGeo.dispose()
+    femaleGeo.dispose()
+  }
   console.log('Done →', outDir)
-  console.log(`Download (${VERSION} — shared strength profile w/ app):`)
-  console.log(`  http://127.0.0.1:5173/test-joints/pla-ball-stem-${VERSION}.stl`)
-  console.log(`  http://127.0.0.1:5173/test-joints/pla-socket-${VERSION}.stl`)
 }
 
 main().catch((e) => {

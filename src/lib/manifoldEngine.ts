@@ -13,6 +13,7 @@ import { jointLocalToWorld } from './cutterGeometry'
 import {
   DEFAULT_FILAMENT,
   getFilamentProfile,
+  MIN_RELIABLE_BALL_DIAMETER_MM,
   socketRadialDims,
   type FilamentProfile,
   type FilamentType,
@@ -726,6 +727,13 @@ function applyBallAndSocket(
     }
 
     const dims = ballStemDims(baseRadius, joint)
+    const ballD = dims.ballR * 2
+    if (ballD < MIN_RELIABLE_BALL_DIAMETER_MM) {
+      const pct = Math.ceil((MIN_RELIABLE_BALL_DIAMETER_MM / ballD) * 100)
+      warn(
+        `Joint #${joint.id}: ball is only Ø${ballD.toFixed(1)} mm — fragile. Print this part with the stem lying flat, or scale the whole model to ${pct}% for a Ø${MIN_RELIABLE_BALL_DIAMETER_MM} mm ball.`,
+      )
+    }
     const ballLocal = localize(result[ballIdx])
     const sockLocal = localize(result[socketIdx])
     const plan = planJointSeat(Manifold, ballLocal, sockLocal, dims, filament, jR)

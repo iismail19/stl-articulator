@@ -23,9 +23,14 @@ function check(name: string, got: number, want: number, eps = 1e-9) {
 }
 
 const pla = getFilamentProfile('pla')
+const plaPlus = getFilamentProfile('pla_plus')
 check('PLA socketClearance', pla.socketClearance, PLA_VALIDATED.socketClearance)
 check('PLA mouthRatio', pla.mouthRatio, PLA_VALIDATED.mouthRatio)
 check('PLA flexSlots', pla.flexSlots, PLA_VALIDATED.flexSlots)
+check('PLA+ socketClearance', plaPlus.socketClearance, pla.socketClearance)
+check('PLA+ mouthRatio', plaPlus.mouthRatio, pla.mouthRatio)
+check('PLA+ flexSlots', plaPlus.flexSlots, pla.flexSlots)
+check('PLA+ maxGapMm', plaPlus.maxGapMm ?? -1, pla.maxGapMm ?? -1)
 
 // Ø8 mm test ball — same as gen-pla-test-joint
 const ballR = 4

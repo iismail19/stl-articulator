@@ -134,30 +134,58 @@ export function Sidebar({
           Sets snap tightness so joints don’t crack on first insert.
         </p>
         <div className="axis-row filament-row">
-          {(Object.keys(FILAMENT_PROFILES) as FilamentType[]).map((id) => (
-            <button
-              key={id}
-              type="button"
-              className={`axis-btn ${filament === id ? 'active' : ''}`}
-              onClick={() => onFilamentChange(id)}
-            >
-              {FILAMENT_PROFILES[id].label}
-            </button>
-          ))}
+          {(Object.keys(FILAMENT_PROFILES) as FilamentType[]).map((id) => {
+            const profile = FILAMENT_PROFILES[id]
+            return (
+              <button
+                key={id}
+                type="button"
+                className={`axis-btn ${filament === id ? 'active' : ''}`}
+                disabled={!profile.tested}
+                title={profile.tested ? undefined : 'Not print-tested yet'}
+                onClick={() => onFilamentChange(id)}
+              >
+                {profile.label}
+              </button>
+            )
+          })}
         </div>
         <p className="filament-hint">{FILAMENT_PROFILES[filament].hint}</p>
         <p className="muted" style={{ marginTop: '0.55rem' }}>
-          Print-tested PLA pair (Ø8 mm) — model joints use these same snap settings:
+          PLA test pair (Ø8 mm) — PLA and PLA+ both use this snap:
         </p>
         <div className="btn-row">
           <a
             className="btn btn-ghost btn-sm"
-            href="/test-joints/pla-ball-stem-v10.stl"
+            href="/test-joints/pla-ball-stem-v12.stl"
             download
           >
             Ball + stem
           </a>
-          <a className="btn btn-ghost btn-sm" href="/test-joints/pla-socket-v10.stl" download>
+          <a
+            className="btn btn-ghost btn-sm"
+            href="/test-joints/pla-socket-v12.stl"
+            download
+          >
+            Socket
+          </a>
+        </div>
+        <p className="muted" style={{ marginTop: '0.55rem' }}>
+          Small-joint pair (Ø4 mm, face cut at 22° like an elbow):
+        </p>
+        <div className="btn-row">
+          <a
+            className="btn btn-ghost btn-sm"
+            href="/test-joints/pla-d4-angled-ball-stem-v12.stl"
+            download
+          >
+            Ball + stem
+          </a>
+          <a
+            className="btn btn-ghost btn-sm"
+            href="/test-joints/pla-d4-angled-socket-v12.stl"
+            download
+          >
             Socket
           </a>
         </div>
