@@ -260,10 +260,6 @@ async function main() {
     const name = `${prefix}${spec.tag}`
     writeStl(maleGeo, path.join(outDir, `${name}-ball-stem-${VERSION}.stl`))
     writeStl(femaleGeo, path.join(outDir, `${name}-socket-${VERSION}.stl`))
-    if (!spec.tag) {
-      writeStl(maleGeo, path.join(outDir, `${name}-ball-stem.stl`))
-      writeStl(femaleGeo, path.join(outDir, `${name}-socket.stl`))
-    }
     maleGeo.dispose()
     femaleGeo.dispose()
   }

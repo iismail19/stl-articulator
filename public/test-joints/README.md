@@ -5,11 +5,7 @@ Print both parts in **PLA or PLA+**. The app uses this one snap for both. PETG, 
 | File | What |
 |------|------|
 | `pla-ball-stem-v12.stl` / `pla-socket-v12.stl` | Validated pair used for **PLA and PLA+** |
-| `pla-firm-*-v12.stl` | Retired tighter-cup experiment (not in the app) |
-| `pla-tight-*-v12.stl` | Retired zero-gap experiment (not in the app) |
-| `*-d4-angled-*-v12.stl` | **Small joint** — Ø4 mm ball, joint face cut at 22° like an elbow; print flat side down, as exported |
-| `*-v10.stl` | Original large-block PLA pair that validated the fit (has a bore under the cup — ball can be pushed too deep) |
-| `pla-ball-stem.stl` / `pla-socket.stl` | Same as latest version (aliases) |
+| `pla-d4-angled-ball-stem-v12.stl` / `pla-d4-angled-socket-v12.stl` | **Small joint** — Ø4 mm ball, joint face cut at 22° like an elbow; print flat side down, as exported |
 
 **Validated snap (from real print), shared by PLA and PLA+:**
 - Socket clearance **1.05×** ball radius
