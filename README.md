@@ -60,6 +60,7 @@ npx tsx scripts/prove-ball-locked.mts    # ball output identical to the locked e
 npx tsx scripts/prove-knuckle-locked.mts # knuckle (standard + thin) identical to the print-tested pairs
 npx tsx scripts/prove-hinge-locked.mts   # hinge identical to the print-tested pair
 npx tsx scripts/prove-kind-isolation.mts # editing one joint type never changes another
+npx tsx scripts/prove-simplify.mts       # Simplify Mesh keeps the model watertight and cuttable
 npx tsx scripts/prove-knuckle-cut.mts
 npx tsx scripts/prove-hinge-cut.mts
 npx tsx scripts/prove-flip.mts

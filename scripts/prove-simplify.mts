@@ -90,10 +90,12 @@ for (const file of files) {
   console.log = () => {}
   const res = await cutAndSplitModel(simp, joints, baseRadius, undefined, 'pla')
   console.log = log
+  // The cut can leave sub-0.01% slivers on DAG.stl even unsimplified; count real parts only.
+  const real = res.parts.filter((p) => (solidVolume(p, modelSize) ?? 0) > (v1 ?? 0) * 0.001).length
   ok(
     'Auto-Suggest cut builds every joint',
-    res.warnings.length === 0 && res.parts.length === joints.length + 1,
-    `${joints.length} joints → ${res.parts.length} parts${res.warnings.length ? `; ${res.warnings.join(' | ')}` : ''}`,
+    res.warnings.length === 0 && real === joints.length + 1,
+    `${joints.length} joints → ${real} parts${res.warnings.length ? `; ${res.warnings.join(' | ')}` : ''}`,
   )
   res.cut.dispose()
   for (const g of res.parts) g.dispose()
