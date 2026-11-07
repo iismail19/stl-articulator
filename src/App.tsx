@@ -9,7 +9,18 @@ import {
   FILAMENT_PROFILES,
   getFilamentProfile,
 } from './lib/filamentProfiles'
-import { applyJointTransform, createCutterGeometry } from './lib/cutterGeometry'
+import {
+  DEFAULT_JOINT_KIND,
+  getJointKind,
+  bendsOnOneAxis,
+  normalizeJointKind,
+} from './lib/jointKinds'
+import {
+  applyJointTransform,
+  createCutterGeometry,
+  figureAxes,
+  frontBackHingeTwist,
+} from './lib/cutterGeometry'
 import {
   disposeProbeGeometry,
   enlargeJoints,
@@ -18,9 +29,10 @@ import {
   probeJointAtPoint,
   clampJointScales,
   refitJointsToLimbs,
-  suggestJoints,
   type ProbeMesh,
 } from './lib/meshProbe'
+import { suggestFigureJoints } from './lib/figureTemplate'
+import { predictSocketSide, socketSideKey, type SocketSide } from './lib/hostSide'
 import { simplifyGeometry, type SimplifyStrength } from './lib/simplifyMesh'
 import {
   downloadBlob,
@@ -29,13 +41,61 @@ import {
   loadStlFile,
   suggestBaseRadius,
 } from './lib/stlIO'
-import type { FilamentType, Joint, ModelInfo } from './types'
+import type { FilamentType, Joint, JointKind, ModelInfo } from './types'
 import './App.css'
 
 let nextJointId = 1
 
+/** The side the last preview actually built, valid while the marker is unchanged. */
+type BuiltSides = Record<number, { key: string; side: SocketSide }>
+
 // v2: joints stay on the cut (old saves recentered into limbs and broke sockets)
 const JOINTS_KEY = (name: string) => `stl-articulator-joints:v2:${name}`
+
+/**
+ * Every marker must have a unique id. Duplicate ids make React keys collide and
+ * cause drag/select/delete to hit every twin — e.g. a neck and an elbow both
+ * "#1" get dragged to the same spot when either moves.
+ */
+function syncNextJointId(joints: Joint[]) {
+  let max = 0
+  for (const j of joints) {
+    if (typeof j.id === 'number' && j.id > max) max = j.id
+  }
+  if (nextJointId <= max) nextJointId = max + 1
+}
+
+function allocJointId(existing: Joint[]): number {
+  syncNextJointId(existing)
+  return nextJointId++
+}
+
+/** Reassign colliding ids; normalize kind. Call on load and before persist. */
+function sanitizeJoints(joints: Joint[]): Joint[] {
+  const seen = new Set<number>()
+  let max = 0
+  const out: Joint[] = []
+  for (const j of joints) {
+    let id = typeof j.id === 'number' && Number.isFinite(j.id) ? j.id : 0
+    if (id < 1 || seen.has(id)) {
+      id = Math.max(max, ...seen, nextJointId - 1) + 1
+    }
+    seen.add(id)
+    max = Math.max(max, id)
+    out.push({
+      ...j,
+      id,
+      axis: j.axis === 'x' || j.axis === 'z' ? j.axis : 'y',
+      scale: typeof j.scale === 'number' ? j.scale : 1,
+      rotation: typeof j.rotation === 'number' ? j.rotation : 0,
+      tilt: Array.isArray(j.tilt) ? (j.tilt as [number, number, number]) : [0, 0, 0],
+      kind: normalizeJointKind(j.kind),
+      position: j.position,
+    })
+  }
+  syncNextJointId(out)
+  return out
+}
 
 function loadSavedJoints(modelName: string): Joint[] | null {
   try {
@@ -43,14 +103,7 @@ function loadSavedJoints(modelName: string): Joint[] | null {
     if (!raw) return null
     const parsed = JSON.parse(raw) as Joint[]
     if (!Array.isArray(parsed) || parsed.length === 0) return null
-    return parsed.map((j, i) => ({
-      id: typeof j.id === 'number' ? j.id : i + 1,
-      position: j.position,
-      axis: j.axis === 'x' || j.axis === 'z' ? j.axis : 'y',
-      scale: typeof j.scale === 'number' ? j.scale : 1,
-      rotation: typeof j.rotation === 'number' ? j.rotation : 0,
-      tilt: Array.isArray(j.tilt) ? j.tilt : [0, 0, 0],
-    }))
+    return sanitizeJoints(parsed)
   } catch {
     return null
   }
@@ -59,7 +112,7 @@ function loadSavedJoints(modelName: string): Joint[] | null {
 function saveJoints(modelName: string, joints: Joint[]) {
   try {
     if (joints.length === 0) localStorage.removeItem(JOINTS_KEY(modelName))
-    else localStorage.setItem(JOINTS_KEY(modelName), JSON.stringify(joints))
+    else localStorage.setItem(JOINTS_KEY(modelName), JSON.stringify(sanitizeJoints(joints)))
   } catch {
     /* ignore quota */
   }
@@ -98,6 +151,7 @@ export default function App() {
 
   const [previewParts, setPreviewParts] = useState<THREE.BufferGeometry[] | null>(null)
   const [previewCut, setPreviewCut] = useState<THREE.BufferGeometry | null>(null)
+  const [builtSides, setBuiltSides] = useState<BuiltSides>({})
   const [explode, setExplode] = useState(0.45)
   const [simplifyStrength, setSimplifyStrength] = useState<SimplifyStrength>('medium')
   const [canUndoSimplify, setCanUndoSimplify] = useState(false)
@@ -113,6 +167,14 @@ export default function App() {
     }
     return DEFAULT_FILAMENT
   })
+  const [jointKind, setJointKind] = useState<JointKind>(() => {
+    try {
+      return normalizeJointKind(localStorage.getItem('stl-articulator-joint-kind'))
+    } catch {
+      /* ignore */
+    }
+    return DEFAULT_JOINT_KIND
+  })
 
   const probeRef = useRef<ProbeMesh | null>(null)
   const originalGeoRef = useRef<THREE.BufferGeometry | null>(null)
@@ -127,6 +189,18 @@ export default function App() {
     if (!model) return 1
     return Math.max(...model.size, 1e-6)
   }, [model])
+
+  const socketSides = useMemo(() => {
+    const out: Record<number, SocketSide> = {}
+    for (const j of joints) {
+      const built = builtSides[j.id]
+      out[j.id] =
+        built && built.key === socketSideKey(j)
+          ? built.side
+          : predictSocketSide(j, joints, modelSize, model ? figureAxes(model.size) : undefined)
+    }
+    return out
+  }, [joints, builtSides, modelSize, model])
 
   const rebuildProbe = useCallback((geo: THREE.BufferGeometry) => {
     disposeProbeGeometry(probeRef.current?.geometry ?? geo)
@@ -154,11 +228,25 @@ export default function App() {
       }
       clearPreview()
       setInfoMsg(
-        `Filament set to ${getFilamentProfile(next).label} — re-run Preview to rebuild joints.`,
+        `Filament set to ${getFilamentProfile(next).label} — affects ball & socket snap only. Re-run Preview to rebuild. Hinge / other kinds keep their own profiles.`,
       )
     },
     [clearPreview],
   )
+
+  const setJointKindAndPersist = useCallback((next: JointKind) => {
+    // Placement default only — never rewrites markers already on the model.
+    setJointKind(next)
+    try {
+      localStorage.setItem('stl-articulator-joint-kind', next)
+    } catch {
+      /* ignore */
+    }
+    const profile = getJointKind(next)
+    setInfoMsg(
+      `New markers will be ${profile.label}. Existing joints keep their own type and settings.`,
+    )
+  }, [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -177,6 +265,24 @@ export default function App() {
     saveJoints(model.name, joints)
   }, [model, joints])
 
+  // HMR / stale saves can leave two markers with id 1 — drag then moves both
+  // (neck collapses onto the elbow). Repair once and keep the allocator ahead.
+  useEffect(() => {
+    syncNextJointId(joints)
+    const ids = joints.map((j) => j.id)
+    if (ids.length === new Set(ids).size) return
+    const fixed = sanitizeJoints(joints)
+    setJoints(fixed)
+    setSelectedId((cur) => {
+      if (cur == null) return cur
+      if (fixed.some((j) => j.id === cur)) return cur
+      return fixed[0]?.id ?? null
+    })
+    setInfoMsg(
+      'Repaired duplicate joint IDs so each marker is independent. Check neck / elbow — a shared ID had been moving them together.',
+    )
+  }, [joints])
+
   const handleLoad = useCallback(
     async (file: File) => {
       setError(null)
@@ -188,6 +294,7 @@ export default function App() {
         originalGeoRef.current = geo.clone()
         originalInfoRef.current = { ...info }
         setCanUndoSimplify(false)
+        setBuiltSides({})
         setGeometry((prev) => {
           if (prev) disposeProbeGeometry(prev)
           prev?.dispose()
@@ -236,6 +343,7 @@ export default function App() {
     probeRef.current = null
     setModel(null)
     setJoints([])
+    nextJointId = 1
     setSelectedId(null)
     setPlacing(false)
   }, [clearPreview])
@@ -244,41 +352,66 @@ export default function App() {
     (point: THREE.Vector3, normal: THREE.Vector3) => {
       const mesh = probeRef.current ?? (geometry ? prepareProbeMesh(geometry) : null)
       if (mesh) probeRef.current = mesh
-      let joint: Joint
-      if (mesh && model) {
-        const hint = probeJointAtPoint(mesh, point, normal, modelSize)
-        joint = hintToJoint(hint, nextJointId++, baseRadius)
-      } else {
-        joint = {
-          id: nextJointId++,
-          position: [point.x, point.y, point.z],
-          axis: 'y',
-          scale: 1,
-          rotation: 0,
-          tilt: [0, 0, 0],
+      const kind = normalizeJointKind(jointKind)
+      setJoints((prev) => {
+        const id = allocJointId(prev)
+        let joint: Joint
+        if (mesh && model) {
+          const hint = probeJointAtPoint(mesh, point, normal, modelSize)
+          joint = { ...hintToJoint(hint, id, baseRadius, kind) }
+        } else {
+          joint = {
+            id,
+            position: [point.x, point.y, point.z],
+            axis: 'y',
+            scale: 1,
+            rotation: 0,
+            tilt: [0, 0, 0],
+            kind,
+          }
         }
-      }
-      setJoints((prev) => [...prev, joint])
-      setSelectedId(joint.id)
+        setSelectedId(joint.id)
+        setInfoMsg(
+          `Joint #${joint.id} (${getJointKind(kind).label}) placed. Aim the white arrow along the limb (Cut Axis + Tilt X/Y/Z).`,
+        )
+        return [...prev, joint]
+      })
       setPlacing(false)
       clearPreview()
       setError(null)
-      setInfoMsg(
-        `Joint #${joint.id} placed & centered. Aim the white arrow along the limb (Cut Axis + Tilt X/Y/Z). For wrists/ankles, click the thin middle, then nudge tilt until parts look flush.`,
-      )
     },
-    [baseRadius, model, modelSize, geometry, clearPreview],
+    [baseRadius, model, modelSize, geometry, clearPreview, jointKind],
   )
 
   const updateJoint = useCallback(
     (id: number, patch: Partial<Joint>) => {
-      setJoints((prev) =>
-        prev.map((j) => {
-          if (j.id !== id) return j
-          const merged = { ...j, ...patch }
-          // Re-auto-size when moved or axis changed (click-and-go UX)
-          const moved =
-            patch.position != null || patch.axis != null
+      setJoints((prev) => {
+        // If twins somehow share an id, only the first match updates — never
+        // drag every duplicate (that pulled the neck onto the elbow).
+        let hit = false
+        return prev.map((j) => {
+          if (j.id !== id || hit) return j
+          hit = true
+          const merged: Joint = {
+            ...j,
+            ...patch,
+            id: j.id,
+            kind: normalizeJointKind(patch.kind ?? j.kind),
+          }
+          // A hinge/knuckle twist sets which way it bends; aim it front-to-back
+          // whenever a marker becomes one or its cut axis changes.
+          const becameHinge = bendsOnOneAxis(merged.kind) && !bendsOnOneAxis(j.kind)
+          if (
+            bendsOnOneAxis(merged.kind) &&
+            patch.rotation == null &&
+            (becameHinge || (patch.axis != null && patch.axis !== j.axis))
+          ) {
+            merged.rotation = frontBackHingeTwist(
+              merged,
+              model ? figureAxes(model.size) : undefined,
+            )
+          }
+          const moved = patch.position != null || patch.axis != null
           if (moved && probeRef.current) {
             const [fitted] = refitJointsToLimbs(
               probeRef.current,
@@ -286,19 +419,27 @@ export default function App() {
               baseRadius,
               modelSize,
             )
-            return fitted
+            return { ...fitted, id: j.id, kind: merged.kind }
           }
           return merged
-        }),
-      )
+        })
+      })
       clearPreview()
     },
-    [clearPreview, baseRadius, modelSize],
+    [clearPreview, baseRadius, modelSize, model],
   )
 
   const deleteJoint = useCallback(
     (id: number) => {
-      setJoints((prev) => prev.filter((j) => j.id !== id))
+      setJoints((prev) => {
+        // Delete one marker only, even if a bad save left duplicate ids.
+        let hit = false
+        return prev.filter((j) => {
+          if (j.id !== id || hit) return true
+          hit = true
+          return false
+        })
+      })
       setSelectedId((cur) => (cur === id ? null : cur))
       clearPreview()
     },
@@ -307,6 +448,7 @@ export default function App() {
 
   const clearJoints = useCallback(() => {
     setJoints([])
+    nextJointId = 1
     setSelectedId(null)
     clearPreview()
     setInfoMsg('All joints cleared. Add or Auto-Suggest again.')
@@ -388,21 +530,41 @@ export default function App() {
     setInfoMsg(null)
     clearPreview()
     try {
-      const hints = await suggestJoints(mesh, modelSize, {
-        maxJoints: 14,
-        onProgress: (label) => setProgress(label),
-      })
+      setProgress('Finding neck, shoulders, elbows and knees…')
+      await new Promise((r) => setTimeout(r, 0))
+      const hints = suggestFigureJoints(mesh, modelSize)
       if (hints.length === 0) {
         setError(
-          'Couldn’t find clear narrow spots. Try Simplify Mesh first, or place joints manually (+ Add).',
+          'Couldn’t find the limbs on this model. Place joints manually with + Add.',
         )
         return
       }
-      const next = hints.map((h) => hintToJoint(h, nextJointId++, baseRadius))
-      setJoints(next)
-      setSelectedId(next[0]?.id ?? null)
+      // Never touch existing markers (any kind, any settings) — only fill the
+      // spots that don't have one yet.
+      const nearby = modelSize * 0.06
+      const added: string[] = []
+      let firstSuggestedId: number | null = null
+      const next = [...joints]
+      for (const h of hints) {
+        const taken = next.some(
+          (j) => new THREE.Vector3(...j.position).distanceTo(new THREE.Vector3(...h.position)) < nearby,
+        )
+        if (taken) continue
+        const id = allocJointId(next)
+        next.push(hintToJoint(h, id, baseRadius, h.kind))
+        added.push(h.name)
+        firstSuggestedId ??= id
+      }
+      setJoints(sanitizeJoints(next))
+      setSelectedId(firstSuggestedId)
+      const counts = ['neck', 'shoulder', 'elbow', 'knee']
+        .map((n) => [n, added.filter((a) => a === n).length] as const)
+        .filter(([, c]) => c > 0)
+        .map(([n, c]) => (c > 1 ? `${c} ${n}s` : n))
       setInfoMsg(
-        `Suggested ${next.length} joints at narrow cross-sections. Delete any that look wrong, then Preview Split Joints.`,
+        added.length === 0
+          ? 'Every joint spot already has a marker — nothing added.'
+          : `Added ${counts.join(', ')}. Neck and shoulders are Ball & socket; elbows and knees are Knuckle — change any marker’s type in its panel, then Preview Split Joints.`,
       )
     } catch (err) {
       console.error(err)
@@ -411,7 +573,7 @@ export default function App() {
       setBusy(false)
       setProgress(null)
     }
-  }, [geometry, model, modelSize, baseRadius, clearPreview])
+  }, [geometry, model, modelSize, baseRadius, clearPreview, joints])
 
   // Same auto-fit the preview runs, so downloads match what you inspected
   const fitJointsForCut = useCallback(
@@ -462,7 +624,7 @@ export default function App() {
       let workingJoints = fitJointsForCut(joints)
       setJoints(workingJoints)
 
-      let { cut, parts, warnings } = await cutAndSplitModel(
+      let { cut, parts, warnings, notes, socketSides } = await cutAndSplitModel(
         geometry,
         workingJoints,
         baseRadius,
@@ -478,7 +640,7 @@ export default function App() {
         disposeParts(parts)
         workingJoints = clampJointScales(enlargeJoints(workingJoints, 1.18, maxScale), maxScale)
         setJoints(workingJoints)
-        ;({ cut, parts, warnings } = await cutAndSplitModel(
+        ;({ cut, parts, warnings, notes, socketSides } = await cutAndSplitModel(
           geometry,
           workingJoints,
           baseRadius,
@@ -486,6 +648,12 @@ export default function App() {
           filament,
         ))
       }
+      const built: BuiltSides = {}
+      for (const j of workingJoints) {
+        const side = socketSides?.[j.id]
+        if (side) built[j.id] = { key: socketSideKey(j), side }
+      }
+      setBuiltSides(built)
 
       setPreviewCut((prev) => {
         prev?.dispose()
@@ -505,9 +673,12 @@ export default function App() {
         )
       } else if (warnings.length > 0) {
         setError(`Preview ready — ${parts.length} parts, but:\n• ${warnings.join('\n• ')}`)
+        if (notes.length) setInfoMsg(notes.join(' '))
       } else {
         setInfoMsg(
-          `Preview ready — ${parts.length} parts with ball↔socket at each joint. Use Explode to inspect.`,
+          notes.length
+            ? `Preview ready — ${parts.length} body parts. ${notes.join(' ')}`
+            : `Preview ready — ${parts.length} body part(s). Use Explode to inspect, then download.`,
         )
       }
     } catch (err) {
@@ -562,13 +733,26 @@ export default function App() {
     }
     if (!parts || !model) return
     const base = model.name.replace(/\.stl$/i, '')
-    await downloadStlZip(
-      parts.map((geometry, i) => ({ name: `${base}-part-${i + 1}.stl`, geometry })),
-      `${base}-parts.zip`,
-    )
-    setInfoMsg(`Downloaded ${base}-parts.zip — ${parts.length} part STLs with balls & sockets.`)
-    if (owned) disposeParts(parts)
-  }, [previewParts, geometry, joints, baseRadius, model, filament, fitJointsForCut])
+    const files = [
+      ...parts.map((geometry, i) => ({
+        name: `${base}-part-${i + 1}.stl`,
+        geometry,
+      })),
+    ]
+    await downloadStlZip(files, `${base}-parts.zip`)
+    setInfoMsg(`Downloaded ${base}-parts.zip — ${parts.length} body part(s) with joint hardware.`)
+    if (owned) {
+      disposeParts(parts)
+    }
+  }, [
+    previewParts,
+    geometry,
+    joints,
+    baseRadius,
+    model,
+    filament,
+    fitJointsForCut,
+  ])
 
   const exportCutters = useCallback(async () => {
     if (!model || joints.length === 0) return
@@ -590,15 +774,25 @@ export default function App() {
 
   const exportBallHardware = useCallback(async () => {
     if (!model || joints.length === 0) return
+    const ballJoints = joints.filter((j) => normalizeJointKind(j.kind) === 'ball')
+    if (ballJoints.length === 0) {
+      setError(
+        'No ball & socket markers to export. Hinge / knuckle / swivel / universal use their own test downloads.',
+      )
+      return
+    }
     const base = model.name.replace(/\.stl$/i, '')
-    const files = joints.map((joint, i) => ({
+    const files = ballJoints.map((joint, i) => ({
       name: `${base}-ball-joint-${i + 1}.stl`,
       geometry: createBallHardwareGeometry(baseRadius, joint),
     }))
     await downloadStlZip(files, `${base}-ball-joints.zip`)
     for (const f of files) f.geometry.dispose()
+    const skipped = joints.length - ballJoints.length
     setInfoMsg(
-      `Downloaded ${joints.length} printable ball joint(s). Print those separately and snap into the sockets on your body parts.`,
+      skipped > 0
+        ? `Downloaded ${ballJoints.length} ball joint(s). Left ${skipped} non-ball marker(s) alone.`
+        : `Downloaded ${ballJoints.length} printable ball joint(s). Print those separately and snap into the sockets on your body parts.`,
     )
   }, [model, joints, baseRadius])
 
@@ -627,6 +821,8 @@ export default function App() {
         onClearJoints={clearJoints}
         filament={filament}
         onFilamentChange={setFilamentAndPersist}
+        jointKind={jointKind}
+        onJointKindChange={setJointKindAndPersist}
         simplifyStrength={simplifyStrength}
         canUndoSimplify={canUndoSimplify}
         onSimplifyStrengthChange={setSimplifyStrength}
@@ -647,6 +843,7 @@ export default function App() {
         previewParts={previewParts}
         explode={explode}
         joints={joints}
+        socketSides={socketSides}
         selectedId={selectedId}
         baseRadius={baseRadius}
         placing={placing}

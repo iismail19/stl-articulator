@@ -40,7 +40,7 @@ export async function cutAndSplitModel(
 ): Promise<CutResult> {
   if (joints.length === 0) {
     const clone = sourceGeometry.clone()
-    return { cut: clone, parts: [clone.clone()], warnings: [] }
+    return { cut: clone, parts: [clone.clone()], warnings: [], notes: [] }
   }
   return cutWithManifold(
     sourceGeometry,

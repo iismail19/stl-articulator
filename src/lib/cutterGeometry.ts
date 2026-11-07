@@ -64,8 +64,9 @@ export function cutterOrientation(axis: CutAxis, rotationDeg: number): THREE.Eul
   const rot = THREE.MathUtils.degToRad(rotationDeg)
   switch (axis) {
     case 'x':
-      // +Y → +X (was +PI/2 → −X, opposite of Manifold)
-      return new THREE.Euler(0, rot, -Math.PI / 2)
+      // +Y → +X (was +PI/2 → −X, opposite of Manifold). ZYX so the twist spins
+      // about the limb instead of tilting the cut plane.
+      return new THREE.Euler(0, rot, -Math.PI / 2, 'ZYX')
     case 'y':
       return new THREE.Euler(0, rot, 0)
     case 'z':
@@ -119,6 +120,58 @@ export function jointLocalToWorld(joint: Joint): THREE.Matrix4 {
     q,
     new THREE.Vector3(1, 1, 1),
   )
+}
+
+/** World direction of the hinge pin (joint-local +Y in the cut frame). */
+export function hingeAxisWorld(joint: Joint): THREE.Vector3 {
+  return new THREE.Vector3(0, 1, 0).transformDirection(jointLocalToWorld(joint))
+}
+
+export interface FigureAxes {
+  up: CutAxis
+  /** Front-to-back — the direction knees and elbows bend. */
+  depth: CutAxis
+}
+
+const Z_UP: FigureAxes = { up: 'z', depth: 'y' }
+
+/** A standing figure is tallest along up and thinnest front-to-back. */
+export function figureAxes(size: [number, number, number]): FigureAxes {
+  const order = (['x', 'y', 'z'] as const)
+    .map((a, i) => ({ a, v: size[i] }))
+    .sort((p, q) => q.v - p.v)
+  return { up: order[0].a, depth: order[2].a }
+}
+
+const AXIS_INDEX: Record<CutAxis, number> = { x: 0, y: 1, z: 2 }
+
+function axisVec(a: CutAxis): THREE.Vector3 {
+  return new THREE.Vector3().setComponent(AXIS_INDEX[a], 1)
+}
+
+/**
+ * Twist that makes a hinge bend front-to-back, like a knee or elbow. A limb
+ * that itself points front-to-back bends up/down instead.
+ */
+export function frontBackHingeTwist(joint: Joint, figure: FigureAxes = Z_UP): number {
+  const limb = new THREE.Vector3(0, 0, 1).transformDirection(jointLocalToWorld(joint))
+  const want =
+    Math.abs(limb.getComponent(AXIS_INDEX[figure.depth])) > 0.7
+      ? axisVec(figure.up)
+      : axisVec(figure.depth)
+  let best = 0
+  let bestScore = -1
+  for (const rotation of [0, 90, 180, 270]) {
+    const bend = new THREE.Vector3(1, 0, 0).transformDirection(
+      jointLocalToWorld({ ...joint, rotation }),
+    )
+    const score = Math.abs(bend.dot(want))
+    if (score > bestScore + 1e-6) {
+      best = rotation
+      bestScore = score
+    }
+  }
+  return best
 }
 
 export function applyJointTransform(

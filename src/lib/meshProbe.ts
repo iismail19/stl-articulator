@@ -4,8 +4,14 @@ import {
   computeBoundsTree,
   disposeBoundsTree,
 } from 'three-mesh-bvh'
-import type { CutAxis, Joint } from '../types'
-import { jointCutNormal } from './cutterGeometry'
+import type { CutAxis, Joint, JointKind } from '../types'
+import { bendsOnOneAxis, DEFAULT_JOINT_KIND } from './jointKinds'
+import {
+  figureAxes,
+  frontBackHingeTwist,
+  jointCutNormal,
+  type FigureAxes,
+} from './cutterGeometry'
 
 type GeoWithBVH = THREE.BufferGeometry & {
   computeBoundsTree?: (options?: object) => void
@@ -44,6 +50,7 @@ function extentAlong(
   origin: THREE.Vector3,
   dir: THREE.Vector3,
   maxDist: number,
+  missIsLong = false,
 ): number {
   const raycaster = new THREE.Raycaster()
   ;(raycaster as THREE.Raycaster & { firstHitOnly?: boolean }).firstHitOnly = true
@@ -57,8 +64,20 @@ function extentAlong(
 
   const a = hitA[0]?.distance
   const b = hitB[0]?.distance
+  if (missIsLong) {
+    if (a == null && b == null) return 0
+    return (a ?? maxDist) + (b ?? maxDist)
+  }
   if (a == null || b == null) return 0
   return a + b
+}
+
+/** Figure axes from the model's bounding box: tallest side is up, thinnest is front-to-back. */
+export function figureAxesOf(geometry: THREE.BufferGeometry): FigureAxes {
+  if (!geometry.boundingBox) geometry.computeBoundingBox()
+  const s = new THREE.Vector3()
+  geometry.boundingBox!.getSize(s)
+  return figureAxes([s.x, s.y, s.z])
 }
 
 function hitDistance(
@@ -197,6 +216,8 @@ export interface LocalJointHint {
   /** Kerf / ring radius in world units (must clear the limb). */
   radius: number
   diameter: number
+  /** Which way the model stands — aims hinge/knuckle bends front-to-back. */
+  figure?: FigureAxes
 }
 
 /**
@@ -213,18 +234,25 @@ export function probeJointAtPoint(
   const n = normal.clone().normalize()
   const origin = point.clone().addScaledVector(n, -inward)
 
+  // Z-up models keep the original probe exactly. Other exports (e.g. Y-up) prefer
+  // their own up axis, and a ray that runs out of range means the limb keeps going.
+  const figure = figureAxesOf(mesh.geometry)
+  const zUp = figure.up === 'z'
   const extents: Record<CutAxis, number> = {
-    x: extentAlong(mesh, origin, AXIS_VEC.x, maxDist),
-    y: extentAlong(mesh, origin, AXIS_VEC.y, maxDist),
-    z: extentAlong(mesh, origin, AXIS_VEC.z, maxDist),
+    x: extentAlong(mesh, origin, AXIS_VEC.x, maxDist, !zUp),
+    y: extentAlong(mesh, origin, AXIS_VEC.y, maxDist, !zUp),
+    z: extentAlong(mesh, origin, AXIS_VEC.z, maxDist, !zUp),
   }
 
-  // Along-limb = longest local tunnel. Soft-prefer Z (STL up) when close — the
-  // engine's neck and hanging-limb rules are Z-up.
-  let axis: CutAxis = 'z'
+  // Along-limb = longest local tunnel. Soft-prefer the up axis when close —
+  // hanging arms and legs run along it.
+  let axis: CutAxis = figure.up
   let best = -1
   for (const a of ['x', 'y', 'z'] as CutAxis[]) {
-    const score = extents[a] * (a === 'z' ? 1.12 : 1)
+    // A limb's skin faces sideways from its length, so the axis you clicked
+    // along only measures the limb's thickness.
+    const facing = !zUp && Math.abs(n.getComponent('xyz'.indexOf(a))) > 0.7 ? 0.5 : 1
+    const score = extents[a] * (a === figure.up ? 1.12 : 1) * facing
     if (score > best) {
       best = score
       axis = a
@@ -241,6 +269,7 @@ export function probeJointAtPoint(
     axis,
     radius,
     diameter: radius * 2,
+    figure,
   }
 }
 
@@ -267,207 +296,31 @@ export function refitJointsToLimbs(
     )
     return {
       ...j,
+      kind: j.kind,
       tilt: j.tilt ?? [0, 0, 0],
       scale,
     }
   })
 }
 
-function sampleSurfacePoints(
-  geometry: THREE.BufferGeometry,
-  count: number,
-): { point: THREE.Vector3; normal: THREE.Vector3 }[] {
-  const pos = geometry.getAttribute('position') as THREE.BufferAttribute
-  const index = geometry.getIndex()
-  const triCount = index ? index.count / 3 : pos.count / 3
-  const out: { point: THREE.Vector3; normal: THREE.Vector3 }[] = []
-  if (triCount < 1) return out
-
-  const a = new THREE.Vector3()
-  const b = new THREE.Vector3()
-  const c = new THREE.Vector3()
-  const ab = new THREE.Vector3()
-  const ac = new THREE.Vector3()
-  const n = new THREE.Vector3()
-
-  for (let i = 0; i < count; i++) {
-    const t = Math.floor(Math.random() * triCount)
-    let i0: number
-    let i1: number
-    let i2: number
-    if (index) {
-      i0 = index.getX(t * 3)
-      i1 = index.getX(t * 3 + 1)
-      i2 = index.getX(t * 3 + 2)
-    } else {
-      i0 = t * 3
-      i1 = t * 3 + 1
-      i2 = t * 3 + 2
-    }
-    a.fromBufferAttribute(pos, i0)
-    b.fromBufferAttribute(pos, i1)
-    c.fromBufferAttribute(pos, i2)
-    let u = Math.random()
-    let v = Math.random()
-    if (u + v > 1) {
-      u = 1 - u
-      v = 1 - v
-    }
-    const point = a
-      .clone()
-      .multiplyScalar(1 - u - v)
-      .addScaledVector(b, u)
-      .addScaledVector(c, v)
-    ab.subVectors(b, a)
-    ac.subVectors(c, a)
-    n.crossVectors(ab, ac).normalize()
-    if (n.lengthSq() < 1e-10) continue
-    out.push({ point, normal: n.clone() })
-  }
-  return out
-}
-
-export interface SuggestOptions {
-  maxJoints?: number
-  onProgress?: (label: string) => void
-}
-
-export async function suggestJoints(
-  mesh: ProbeMesh,
-  modelSize: number,
-  opts: SuggestOptions = {},
-): Promise<LocalJointHint[]> {
-  const maxJoints = opts.maxJoints ?? 10
-  opts.onProgress?.('Sampling surface for thin spots…')
-  await new Promise((r) => setTimeout(r, 0))
-
-  const samples = sampleSurfacePoints(mesh.geometry, 400)
-  type Cand = LocalJointHint & { score: number }
-  const cands: Cand[] = []
-
-  for (let i = 0; i < samples.length; i++) {
-    if (i % 80 === 0) {
-      opts.onProgress?.(`Probing thin spots… ${Math.round((i / samples.length) * 100)}%`)
-      await new Promise((r) => setTimeout(r, 0))
-    }
-    const { point, normal } = samples[i]
-    const hint = probeJointAtPoint(mesh, point, normal, modelSize)
-    cands.push({ ...hint, score: hint.diameter })
-  }
-
-  if (cands.length === 0) {
-    opts.onProgress?.('Using bounding-box fallback spots…')
-    mesh.geometry.computeBoundingBox()
-    const box = mesh.geometry.boundingBox!
-    const c = new THREE.Vector3()
-    box.getCenter(c)
-    const size = new THREE.Vector3()
-    box.getSize(size)
-    // Anatomical defaults matching typical figure screenshots (Z-up figures)
-    const fallbackAxes: { axis: CutAxis; p: THREE.Vector3; n: THREE.Vector3 }[] = [
-      // neck
-      {
-        axis: 'z',
-        p: new THREE.Vector3(c.x, c.y, box.min.z + size.z * 0.82),
-        n: new THREE.Vector3(0, 1, 0),
-      },
-      // shoulders
-      {
-        axis: 'x',
-        p: new THREE.Vector3(box.min.x + size.x * 0.22, c.y, box.min.z + size.z * 0.68),
-        n: new THREE.Vector3(1, 0, 0),
-      },
-      {
-        axis: 'x',
-        p: new THREE.Vector3(box.min.x + size.x * 0.78, c.y, box.min.z + size.z * 0.68),
-        n: new THREE.Vector3(-1, 0, 0),
-      },
-      // elbows
-      {
-        axis: 'x',
-        p: new THREE.Vector3(box.min.x + size.x * 0.12, c.y, box.min.z + size.z * 0.5),
-        n: new THREE.Vector3(1, 0, 0),
-      },
-      {
-        axis: 'x',
-        p: new THREE.Vector3(box.min.x + size.x * 0.88, c.y, box.min.z + size.z * 0.5),
-        n: new THREE.Vector3(-1, 0, 0),
-      },
-      // hips
-      {
-        axis: 'z',
-        p: new THREE.Vector3(box.min.x + size.x * 0.38, c.y, box.min.z + size.z * 0.32),
-        n: new THREE.Vector3(0, 1, 0),
-      },
-      {
-        axis: 'z',
-        p: new THREE.Vector3(box.min.x + size.x * 0.62, c.y, box.min.z + size.z * 0.32),
-        n: new THREE.Vector3(0, 1, 0),
-      },
-      // ankles
-      {
-        axis: 'z',
-        p: new THREE.Vector3(box.min.x + size.x * 0.38, c.y, box.min.z + size.z * 0.12),
-        n: new THREE.Vector3(0, 1, 0),
-      },
-      {
-        axis: 'z',
-        p: new THREE.Vector3(box.min.x + size.x * 0.62, c.y, box.min.z + size.z * 0.12),
-        n: new THREE.Vector3(0, 1, 0),
-      },
-    ]
-    for (const f of fallbackAxes) {
-      const hint = probeJointAtPoint(mesh, f.p, f.n, modelSize)
-      cands.push({
-        ...hint,
-        axis: f.axis,
-        position: [f.p.x, f.p.y, f.p.z],
-        score: hint.diameter,
-      })
-    }
-  }
-
-  cands.sort((a, b) => a.score - b.score)
-  const median = cands[Math.floor(cands.length / 2)]?.score ?? modelSize
-  const thin = cands.filter((c) => c.score <= median * 1.05)
-
-  const picked: LocalJointHint[] = []
-  const minSep = modelSize * 0.1
-
-  for (const c of thin.length ? thin : cands) {
-    if (picked.length >= maxJoints) break
-    const tooClose = picked.some((p) => {
-      const dx = p.position[0] - c.position[0]
-      const dy = p.position[1] - c.position[1]
-      const dz = p.position[2] - c.position[2]
-      return Math.hypot(dx, dy, dz) < minSep
-    })
-    if (tooClose) continue
-    picked.push({
-      position: c.position,
-      axis: c.axis,
-      radius: c.radius,
-      diameter: c.diameter,
-    })
-  }
-
-  return picked
-}
-
 export function hintToJoint(
   hint: LocalJointHint,
   id: number,
   baseRadius: number,
+  kind: JointKind = DEFAULT_JOINT_KIND,
 ): Joint {
   const scale = Math.max(hint.radius / Math.max(baseRadius, 1e-9), 0.2)
-  return {
+  const joint: Joint = {
     id,
     position: hint.position,
     axis: hint.axis,
     scale: Math.min(scale, 3.2),
     rotation: 0,
     tilt: [0, 0, 0],
+    kind,
   }
+  if (bendsOnOneAxis(kind)) joint.rotation = frontBackHingeTwist(joint, hint.figure)
+  return joint
 }
 
 /** Gentle enlarge for retry — never runaway blob sizes. */

@@ -2,6 +2,7 @@ import { OrbitControls } from '@react-three/drei'
 import { Canvas, type ThreeEvent, useThree } from '@react-three/fiber'
 import { Suspense, useEffect, useMemo } from 'react'
 import * as THREE from 'three'
+import type { SocketSide } from '../lib/hostSide'
 import type { Joint } from '../types'
 import { JointMarkers } from './JointMarkers'
 import { PreviewParts } from './PreviewParts'
@@ -11,6 +12,7 @@ interface ViewportProps {
   previewParts: THREE.BufferGeometry[] | null
   explode: number
   joints: Joint[]
+  socketSides: Record<number, SocketSide>
   selectedId: number | null
   baseRadius: number
   placing: boolean
@@ -119,6 +121,7 @@ export function Viewport({
   previewParts,
   explode,
   joints,
+  socketSides,
   selectedId,
   baseRadius,
   placing,
@@ -159,6 +162,7 @@ export function Viewport({
                 />
                 <JointMarkers
                   joints={joints}
+                  socketSides={socketSides}
                   selectedId={selectedId}
                   baseRadius={baseRadius}
                   onSelect={onSelectJoint}
@@ -185,8 +189,8 @@ export function Viewport({
 
       {previewing && (
         <div className="place-banner preview-banner">
-          Preview — {previewParts.length} part{previewParts.length === 1 ? '' : 's'} · drag to
-          orbit · use Explode to separate joints
+          Preview — {previewParts.length} body part{previewParts.length === 1 ? '' : 's'} ·
+          drag to orbit · Explode to separate
         </div>
       )}
     </div>

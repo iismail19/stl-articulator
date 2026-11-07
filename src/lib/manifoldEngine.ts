@@ -9,7 +9,7 @@ import {
   computeBallStemDims,
   type BallStemDims,
 } from './ballStemProfile'
-import { jointLocalToWorld } from './cutterGeometry'
+import { figureAxes, jointLocalToWorld, type FigureAxes } from './cutterGeometry'
 import {
   DEFAULT_FILAMENT,
   getFilamentProfile,
@@ -18,6 +18,31 @@ import {
   type FilamentProfile,
   type FilamentType,
 } from './filamentProfiles'
+import { buildEye, buildStud, eyeBore, hingeCores, motionRecesses } from './hingeGeometry'
+import {
+  fitHingeToLimb,
+  hingeDimsForJoint,
+  MIN_RELIABLE_PEG_DIAMETER_MM,
+  type HingeSpec,
+} from './hingeProfile'
+import { hostFigure, isDistalLimbJoint, isNeckJoint, type SocketSide } from './hostSide'
+import { getJointKind, normalizeJointKind } from './jointKinds'
+import {
+  buildForkBody,
+  buildTongueBody,
+  forkBumps,
+  knuckleCores,
+  knuckleRecesses,
+  tongueDimples,
+} from './knuckleGeometry'
+import {
+  fitKnuckleToLimb,
+  knuckleDimsForJoint,
+  knuckleLayout,
+  MIN_RELIABLE_TONGUE_MM,
+  scaleKnuckleSpec,
+  type KnuckleSpec,
+} from './knuckleProfile'
 import { splitConnectedComponents } from './splitMesh'
 
 export type { FilamentType }
@@ -94,6 +119,22 @@ export function manifoldToGeometry(solid: ManifoldSolid): THREE.BufferGeometry {
   geo.setIndex(new THREE.BufferAttribute(new Uint32Array(out.triVerts), 1))
   geo.computeVertexNormals()
   return geo
+}
+
+function scaleHingeSpec(H: HingeSpec, k: number): HingeSpec {
+  return {
+    discRadius: H.discRadius * k,
+    studThickness: H.studThickness * k,
+    eyeThickness: H.eyeThickness * k,
+    pegDiameter: H.pegDiameter * k,
+    holeClearance: H.holeClearance * k,
+    lipMm: H.lipMm * k,
+    lipLength: H.lipLength * k,
+    shoulderPreload: H.shoulderPreload * k,
+    splitWidth: H.splitWidth * k,
+    motionClearance: H.motionClearance * k,
+    embed: H.embed * k,
+  }
 }
 
 function jointWorldRadius(baseRadius: number, joint: Joint): number {
@@ -628,30 +669,69 @@ function pieceWithMostMaterialAt(
   return best
 }
 
-/** Z-up figures centered on X=0: a Z cut near the midline is the neck/waist. */
-function isNeckJoint(joint: Joint, modelSize: number): boolean {
-  return joint.axis === 'z' && Math.abs(joint.position[0]) < modelSize * 0.08
+/** Pair of piece indices facing across a joint cut, or null. */
+function findJointPair(
+  Manifold: ManifoldApi['Manifold'],
+  pieces: ManifoldSolid[],
+  joint: Joint,
+  jR: number,
+  modelSize: number,
+): { p: number; n: number } | null {
+  const R = Math.max(jR * 1.25, modelSize * 0.03)
+  const { pos, neg } = halfProbeTouch(Manifold, pieces, joint, R)
+  const minTouch = Math.max(jR ** 3 * 0.01, 1e-6)
+  const rank = (arr: number[]) =>
+    arr
+      .map((v, i) => ({ i, v }))
+      .filter((e) => e.v >= minTouch)
+      .sort((a, b) => b.v - a.v)
+      .slice(0, 3)
+  let pair: { p: number; n: number; score: number } | null = null
+  for (const p of rank(pos)) {
+    for (const n of rank(neg)) {
+      if (p.i === n.i) continue
+      const score = Math.min(p.v, n.v)
+      if (!pair || score > pair.score) pair = { p: p.i, n: n.i, score }
+    }
+  }
+  return pair ? { p: pair.p, n: pair.n } : null
 }
 
-/** True for elbow/ankle-style joints that sit distal of a same-axis shoulder/hip. */
-function isDistalLimbJoint(joint: Joint, all: Joint[], modelSize: number): boolean {
-  if (joint.axis === 'z') return false
-  return all.some((other) => {
-    if (other.id === joint.id || other.axis !== joint.axis) return false
-    const sameSide =
-      Math.sign(other.position[0] || 1e-9) === Math.sign(joint.position[0] || 1e-9)
-    return sameSide && other.position[2] > joint.position[2] + modelSize * 0.05
-  })
+/** Which piece gets the socket/fork (vs ball/tang), same anatomy rules as before. */
+function pickHostRoles(
+  pieces: ManifoldSolid[],
+  pair: { p: number; n: number },
+  joint: Joint,
+  joints: Joint[],
+  modelSize: number,
+  figure: FigureAxes,
+): { primaryIdx: number; secondaryIdx: number; primaryOnPos: boolean } {
+  const cP = solidCentroid(pieces[pair.p])[figure.up]
+  const cN = solidCentroid(pieces[pair.n])[figure.up]
+  let primaryIdx: number
+  if (isNeckJoint(joint, modelSize, figure)) {
+    primaryIdx = cP >= cN ? pair.p : pair.n
+  } else if (joint.axis === figure.up || isDistalLimbJoint(joint, joints, modelSize, figure)) {
+    primaryIdx = cP <= cN ? pair.p : pair.n
+  } else {
+    primaryIdx = solidVolume(pieces[pair.p]) >= solidVolume(pieces[pair.n]) ? pair.p : pair.n
+  }
+  if (joint.swapSides) primaryIdx = primaryIdx === pair.p ? pair.n : pair.p
+  const secondaryIdx = primaryIdx === pair.p ? pair.n : pair.p
+  return {
+    primaryIdx,
+    secondaryIdx,
+    primaryOnPos: primaryIdx === pair.p,
+  }
 }
+
 
 /**
  * After kerfs sever limbs: for every joint pick the piece on each side of the
- * cut (local half-ball probes), then seat ball + socket at one shared spot.
- *   Neck (Z):  socket in the HEAD (upper), ball on the torso — frees torso
- *              volume for the shoulder cups.
- *   Elbow:     socket on the distal (lower) piece, ball on the proximal one
- *              (any off-center Z joint, or an X/Y joint below a same-side shoulder).
- *   Shoulder:  socket on the larger piece (torso), ball on the limb.
+ * cut, then seat ball/socket or hinge hardware.
+ *   Neck (up): socket/fork in the HEAD (upper), ball/tang on the torso.
+ *   Elbow:     socket/fork on the distal piece, ball/tang on the proximal one.
+ *   Shoulder:  socket/fork on the larger piece (torso), ball/tang on the limb.
  */
 function applyBallAndSocket(
   Manifold: ManifoldApi['Manifold'],
@@ -662,55 +742,50 @@ function applyBallAndSocket(
   filament: FilamentProfile,
   warnings: string[],
   seats?: JointSeatRecord[],
+  notes?: string[],
+  mmToNorm = 1,
+  socketSides?: Record<number, SocketSide>,
+  figure: FigureAxes = { up: 'z', depth: 'y' },
 ): ManifoldSolid[] {
   const result = pieces.slice()
   const warn = (msg: string) => {
     console.warn(msg)
     warnings.push(msg)
   }
+  const note = (msg: string) => {
+    notes?.push(msg)
+  }
+  // Advice, not failure: the hardware was built, it's just on the small side.
+  const caution = (msg: string) => {
+    console.warn(msg)
+    notes?.push(`Heads up — ${msg}`)
+  }
 
   for (const joint of joints) {
-    const jR = jointWorldRadius(baseRadius, joint)
-    const R = Math.max(jR * 1.25, modelSize * 0.03)
-    const { pos, neg } = halfProbeTouch(Manifold, result, joint, R)
-    const minTouch = Math.max(jR ** 3 * 0.01, 1e-6)
-    const rank = (arr: number[]) =>
-      arr
-        .map((v, i) => ({ i, v }))
-        .filter((e) => e.v >= minTouch)
-        .sort((a, b) => b.v - a.v)
-        .slice(0, 3)
-    let pair: { p: number; n: number; score: number } | null = null
-    for (const p of rank(pos)) {
-      for (const n of rank(neg)) {
-        if (p.i === n.i) continue
-        const score = Math.min(p.v, n.v)
-        if (!pair || score > pair.score) pair = { p: p.i, n: n.i, score }
-      }
-    }
-    if (!pair) {
+    const kind = normalizeJointKind(joint.kind)
+    if (kind === 'swivel' || kind === 'universal') {
       warn(
-        `Joint #${joint.id}: the cut didn't separate two parts here — no ball/socket. Move the marker onto the limb connection or check its Cut Axis.`,
+        `Joint #${joint.id}: ${getJointKind(kind).label} is not built yet — only the cut ran. Use Ball, Hinge or Knuckle for working hardware.`,
       )
       continue
     }
 
-    const cP = solidCentroid(result[pair.p])
-    const cN = solidCentroid(result[pair.n])
-    let socketIdx: number
-    if (isNeckJoint(joint, modelSize)) {
-      socketIdx = cP.z >= cN.z ? pair.p : pair.n
-    } else if (joint.axis === 'z' || isDistalLimbJoint(joint, joints, modelSize)) {
-      socketIdx = cP.z <= cN.z ? pair.p : pair.n
-    } else {
-      socketIdx = solidVolume(result[pair.p]) >= solidVolume(result[pair.n]) ? pair.p : pair.n
+    const jR = jointWorldRadius(baseRadius, joint)
+    const pair = findJointPair(Manifold, result, joint, jR, modelSize)
+    if (!pair) {
+      warn(
+        `Joint #${joint.id}: the cut didn't separate two parts here — no ${kind} hardware. Move the marker onto the limb connection or check its Cut Axis.`,
+      )
+      continue
     }
-    const ballIdx = socketIdx === pair.p ? pair.n : pair.p
-    const ballSide: 1 | -1 = ballIdx === pair.p ? 1 : -1
 
+    const roles = pickHostRoles(result, pair, joint, joints, modelSize, hostFigure(kind, figure))
+    if (socketSides) socketSides[joint.id] = roles.primaryOnPos ? 1 : -1
+    // When the primary host sits on +Z, flip so socket/fork convention is −Z.
+    const flip = roles.primaryOnPos
     const localize = (s: ManifoldSolid) => {
       const l = toJointLocal(s, joint)
-      if (ballSide > 0) return l
+      if (!flip) return l
       const m = l.mirror([0, 0, 1])
       deleteSafe(l)
       return m
@@ -718,7 +793,7 @@ function applyBallAndSocket(
     const toWorld = (s: ManifoldSolid, cx: number, cy: number) => {
       let w = s.translate([cx, cy, 0])
       deleteSafe(s)
-      if (ballSide < 0) {
+      if (flip) {
         const m = w.mirror([0, 0, 1])
         deleteSafe(w)
         w = m
@@ -726,6 +801,246 @@ function applyBallAndSocket(
       return placeAlongAxis(w, joint)
     }
 
+    if (kind === 'knuckle') {
+      const owned: ManifoldSolid[] = []
+      const keep = (s: ManifoldSolid) => {
+        owned.push(s)
+        return s
+      }
+      try {
+        // Fork on the primary (−Z in local after flip), tongue on the secondary (+Z).
+        const forkIdx = roles.primaryIdx
+        const tongueIdx = roles.secondaryIdx
+        const rawFork = keep(localize(result[forkIdx]))
+        const rawTongue = keep(localize(result[tongueIdx]))
+
+        const reach = jR * 2.2
+        const depth = jR * 0.9
+        const rawForkChunk = keep(
+          Manifold.intersection(
+            rawFork,
+            keep(Manifold.cube([reach * 2, reach * 2, depth], false).translate([-reach, -reach, -depth])),
+          ),
+        )
+        const rawTongueChunk = keep(
+          Manifold.intersection(
+            rawTongue,
+            keep(Manifold.cube([reach * 2, reach * 2, depth], false).translate([-reach, -reach, 0])),
+          ),
+        )
+        if (rawForkChunk.isEmpty() || rawTongueChunk.isEmpty()) {
+          warn(`Joint #${joint.id}: no limb on one side of the knuckle — no knuckle hardware. Move the marker onto the limb.`)
+          continue
+        }
+        // Center the knuckle on the material both limbs share at the cut, not on
+        // the marker point — a marker a little off-center would leave no width.
+        const fb = rawForkChunk.boundingBox()
+        const tb = rawTongueChunk.boundingBox()
+        const mid = (i: number) =>
+          (Math.max(fb.min[i], tb.min[i]) + Math.min(fb.max[i], tb.max[i])) / 2
+        const cx = mid(0)
+        const cy = mid(1)
+        const centered = (s: ManifoldSolid) => keep(s.translate([-cx, -cy, 0]))
+        const forkLocal = centered(rawFork)
+        const tongueLocal = centered(rawTongue)
+        const forkChunk = centered(rawForkChunk)
+        const tongueChunk = centered(rawTongueChunk)
+        const room = (m: ManifoldSolid) => {
+          const b = m.boundingBox()
+          return {
+            x: Math.min(-b.min[0], b.max[0]),
+            y: Math.min(-b.min[1], b.max[1]),
+            xOut: Math.max(-b.min[0], b.max[0]),
+          }
+        }
+        const rf = room(forkChunk)
+        const rt = room(tongueChunk)
+        const base = scaleKnuckleSpec(knuckleDimsForJoint(jR / mmToNorm), mmToNorm)
+        const dimpleDepth = knuckleLayout(base).dimpleDepth
+        const fitted = fitKnuckleToLimb(
+          base,
+          Math.min(rf.x, rt.x),
+          Math.min(rf.y, rt.y),
+          1.2 * mmToNorm,
+          Math.max(MIN_RELIABLE_TONGUE_MM * 0.6 * mmToNorm, dimpleDepth * 2 + 0.6 * mmToNorm),
+        )
+        if (!fitted) {
+          warn(`Joint #${joint.id}: limb is too thin here for a knuckle — use Ball, or scale the model up.`)
+          continue
+        }
+        // Clear each limb out to its own widest point so the other can swing past
+        // it — capped, because the probe box can catch a torso or hip beside the limb.
+        const limbHalf = Math.min(Math.max(rf.xOut, rt.xOut), fitted.radius * 1.3)
+        const K = { ...fitted, swing: limbHalf + fitted.motionClearance }
+        const KL = knuckleLayout(K)
+        const tongueMm = KL.tongue / mmToNorm
+        if (tongueMm < MIN_RELIABLE_TONGUE_MM) {
+          const pct = Math.ceil((MIN_RELIABLE_TONGUE_MM / tongueMm) * 100)
+          caution(
+            `Joint #${joint.id}: knuckle tongue is only ${tongueMm.toFixed(1)} mm thick — may be fragile. Scaling the whole model to ${pct}% gives ${MIN_RELIABLE_TONGUE_MM} mm.`,
+          )
+        }
+
+        // Clip hardware to each limb's own outline so nothing pokes out of the surface.
+        const armReach = K.radius + depth
+        const cores = knuckleCores(Manifold, K)
+        keep(cores.fork)
+        keep(cores.tongue)
+        const forkEnvelope = keep(Manifold.hull([forkChunk, cores.fork]))
+        const tongueEnvelope = keep(Manifold.hull([tongueChunk, cores.tongue]))
+        const forkHw = keep(
+          Manifold.intersection(keep(buildForkBody(Manifold, K, armReach)), forkEnvelope),
+        )
+        const tongueHw = keep(
+          Manifold.intersection(keep(buildTongueBody(Manifold, K, armReach)), tongueEnvelope),
+        )
+        const recess = knuckleRecesses(Manifold, K, reach)
+        keep(recess.forkLimb)
+        keep(recess.tongueLimb)
+
+        // Slot after the union so limb material can't fill it; bumps/dimples last.
+        const forkSlotted = keep(
+          Manifold.difference(keep(Manifold.union([forkLocal, forkHw])), recess.forkLimb),
+        )
+        const forkFinal = Manifold.union([forkSlotted, keep(forkBumps(Manifold, K))])
+        const tongueJoined = keep(
+          Manifold.union([keep(Manifold.difference(tongueLocal, recess.tongueLimb)), tongueHw]),
+        )
+        const tongueFinal = Manifold.difference(tongueJoined, keep(tongueDimples(Manifold, K)))
+
+        deleteSafe(result[forkIdx])
+        deleteSafe(result[tongueIdx])
+        result[forkIdx] = toWorld(forkFinal, cx, cy)
+        result[tongueIdx] = toWorld(tongueFinal, cx, cy)
+        note(
+          `Joint #${joint.id} knuckle: slide the rounded tongue into the fork until the bumps click into its dimples. No separate pin, no glue.`,
+        )
+        const dbg = globalThis as ArticDebug
+        if (dbg.__ARTIC_DEBUG) {
+          ;(dbg.__ARTIC_KNUCKLES ??= []).push({ jointId: joint.id, spec: scaleKnuckleSpec(K, 1 / mmToNorm) })
+        }
+        console.log(
+          `  Joint #${joint.id}: knuckle fork=part${forkIdx} tongue=part${tongueIdx} R=${(K.radius / mmToNorm).toFixed(2)}mm width=${(K.width / mmToNorm).toFixed(2)}mm tongue=${tongueMm.toFixed(2)}mm`,
+        )
+      } catch (err) {
+        console.warn(err)
+        warn(`Joint #${joint.id}: knuckle boolean failed — limb stays cut with no knuckle hardware.`)
+      } finally {
+        for (const s of owned) deleteSafe(s)
+      }
+      continue
+    }
+
+    if (kind === 'hinge') {
+      const owned: ManifoldSolid[] = []
+      const keep = (s: ManifoldSolid) => {
+        owned.push(s)
+        return s
+      }
+      try {
+        // Eye on the primary (−Z in local after flip), stud on the secondary (+Z).
+        const eyeIdx = roles.primaryIdx
+        const studIdx = roles.secondaryIdx
+        const eyeLocal = keep(localize(result[eyeIdx]))
+        const studLocal = keep(localize(result[studIdx]))
+
+        // Measure each limb just past the cut so the hinge fits inside it.
+        const reach = jR * 2.2
+        const depth = jR * 0.9
+        const eyeChunk = keep(
+          Manifold.intersection(
+            eyeLocal,
+            keep(Manifold.cube([reach * 2, reach * 2, depth], false).translate([-reach, -reach, -depth])),
+          ),
+        )
+        const studChunk = keep(
+          Manifold.intersection(
+            studLocal,
+            keep(Manifold.cube([reach * 2, reach * 2, depth], false).translate([-reach, -reach, 0])),
+          ),
+        )
+        if (eyeChunk.isEmpty() || studChunk.isEmpty()) {
+          warn(`Joint #${joint.id}: no limb on one side of the hinge — no hinge hardware. Move the marker onto the limb.`)
+          continue
+        }
+        const room = (m: ManifoldSolid) => {
+          const b = m.boundingBox()
+          return {
+            x: Math.min(-b.min[0], b.max[0]),
+            y: Math.min(-b.min[1], b.max[1]),
+          }
+        }
+        const re = room(eyeChunk)
+        const rs = room(studChunk)
+        // Fit numbers are real mm; this space is normalized, so size in mm then scale.
+        const jRmm = jR / mmToNorm
+        const H = fitHingeToLimb(
+          scaleHingeSpec(hingeDimsForJoint(jRmm), mmToNorm),
+          Math.min(re.x, rs.x),
+          Math.min(re.y, rs.y),
+          1.0 * mmToNorm,
+        )
+        if (!H || H.discRadius <= 0) {
+          warn(`Joint #${joint.id}: limb is too thin here for a hinge — use Ball, or scale the model up.`)
+          continue
+        }
+        const pegMm = H.pegDiameter / mmToNorm
+        if (pegMm < MIN_RELIABLE_PEG_DIAMETER_MM) {
+          const pct = Math.ceil((MIN_RELIABLE_PEG_DIAMETER_MM / pegMm) * 100)
+          caution(
+            `Joint #${joint.id}: hinge peg is only Ø${pegMm.toFixed(1)} mm — may be fragile. Scaling the whole model to ${pct}% gives a Ø${MIN_RELIABLE_PEG_DIAMETER_MM} mm peg.`,
+          )
+        }
+
+        // Hardware is clipped to each limb's own outline (hull of the limb end + disc),
+        // so arms fill the gap to the limb but never poke out of the surface.
+        const armReach = H.discRadius + depth
+        const cores = hingeCores(Manifold, H)
+        keep(cores.stud)
+        keep(cores.eye)
+        const eyeEnvelope = keep(Manifold.hull([eyeChunk, cores.eye]))
+        const studEnvelope = keep(Manifold.hull([studChunk, cores.stud]))
+        const eyeHw = keep(Manifold.intersection(keep(buildEye(Manifold, H, armReach)), eyeEnvelope))
+        const studHw = keep(
+          Manifold.intersection(keep(buildStud(Manifold, H, armReach)), studEnvelope),
+        )
+        const recess = motionRecesses(Manifold, H, reach)
+        keep(recess.eyeLimb)
+        keep(recess.studLimb)
+        const bore = keep(eyeBore(Manifold, H))
+
+        const eyeJoined = keep(
+          Manifold.union([keep(Manifold.difference(eyeLocal, recess.eyeLimb)), eyeHw]),
+        )
+        // Bore last so limb material can never plug the hole.
+        const eyeFinal = Manifold.difference(eyeJoined, bore)
+        const studFinal = Manifold.union([
+          keep(Manifold.difference(studLocal, recess.studLimb)),
+          studHw,
+        ])
+
+        deleteSafe(result[eyeIdx])
+        deleteSafe(result[studIdx])
+        result[eyeIdx] = toWorld(eyeFinal, 0, 0)
+        result[studIdx] = toWorld(studFinal, 0, 0)
+        note(
+          `Joint #${joint.id} hinge: snap peg (Ø${pegMm.toFixed(1)} mm) is molded onto one part — press it through the other part's hole until it clicks. No separate pin, no glue.`,
+        )
+        console.log(
+          `  Joint #${joint.id}: hinge eye=part${eyeIdx} stud=part${studIdx} discR=${(H.discRadius / mmToNorm).toFixed(2)}mm width=${((H.studThickness + H.eyeThickness) / mmToNorm).toFixed(2)}mm peg=${pegMm.toFixed(2)}mm`,
+        )
+      } catch (err) {
+        console.warn(err)
+        warn(`Joint #${joint.id}: hinge boolean failed — limb stays cut with no hinge hardware.`)
+      } finally {
+        for (const s of owned) deleteSafe(s)
+      }
+      continue
+    }
+
+    // —— ball & socket ——
+    const socketIdx = roles.primaryIdx
+    const ballIdx = roles.secondaryIdx
     const dims = ballStemDims(baseRadius, joint)
     const ballD = dims.ballR * 2
     if (ballD < MIN_RELIABLE_BALL_DIAMETER_MM) {
@@ -763,7 +1078,6 @@ function applyBallAndSocket(
         warn(`Joint #${joint.id}: the socket part is too small for this ball — no ball/socket.`)
         continue
       }
-      // Ball must never fuse into the socket host — or any neighbor it grazes
       const blockers = [
         carved,
         ...result.filter((p, i) => i !== ballIdx && i !== socketIdx && bboxesOverlap(p, ball)),
@@ -814,13 +1128,23 @@ export type JointSeatRecord = {
   socketR: number
 }
 
-type ArticDebug = { __ARTIC_DEBUG?: boolean; __ARTIC_SEATS?: JointSeatRecord[] }
+type ArticDebug = {
+  __ARTIC_DEBUG?: boolean
+  __ARTIC_SEATS?: JointSeatRecord[]
+  /** Knuckle specs as built, in mm (or print-at-100 mm units). */
+  __ARTIC_KNUCKLES?: { jointId: number; spec: KnuckleSpec }[]
+}
 
 export type CutResult = {
   cut: THREE.BufferGeometry
+  /** Body pieces (fork/tang or ball/socket already in the mesh). */
   parts: THREE.BufferGeometry[]
   /** Joints that were skipped or degraded — show these to the user. */
   warnings: string[]
+  /** Non-error tips (assembly). Shown as info, never as a failure toast. */
+  notes: string[]
+  /** Per joint id: which side of the cut normal got the socket / hole / fork. */
+  socketSides?: Record<number, SocketSide>
 }
 
 export interface CutProgress {
@@ -838,6 +1162,7 @@ async function cutManifoldNormalized(
 ): Promise<CutResult> {
   const filament = getFilamentProfile(filamentType)
   const warnings: string[] = []
+  const notes: string[] = []
   const wasm = await getManifold()
   const { Manifold, Mesh } = wasm
 
@@ -1037,14 +1362,23 @@ async function cutManifoldNormalized(
   onProgress?.({
     current: joints.length,
     total: joints.length,
-    label: 'Adding ball & socket to each joint…',
+    label: 'Adding joint hardware…',
   })
   await new Promise((r) => setTimeout(r, 0))
 
-  // 3) Ball on one side of each joint, socket cavity on the other
+  // 3) Ball/socket or hinge hardware on each joint
+  const socketSides: Record<number, SocketSide> = {}
   if (pieces.length >= 2) {
     const dbg = globalThis as ArticDebug
     const seats: JointSeatRecord[] | undefined = dbg.__ARTIC_DEBUG ? [] : undefined
+    // Under 20 units tall can't be a real-mm figure (e.g. a 1-unit export), so
+    // size mm fit numbers as if it prints at 100 mm — the same space the ball uses.
+    const unitsAreMm = modelSize >= 20
+    if (!unitsAreMm && joints.some((j) => ['hinge', 'knuckle'].includes(normalizeJointKind(j.kind)))) {
+      notes.push(
+        `This model is only ${modelSize.toPrecision(2)} units across, so it isn't in mm — hinge/knuckle fit assumes you print it ${TARGET} mm on its longest side.`,
+      )
+    }
     pieces = applyBallAndSocket(
       Manifold,
       pieces,
@@ -1054,6 +1388,10 @@ async function cutManifoldNormalized(
       filament,
       warnings,
       seats,
+      notes,
+      unitsAreMm ? toNorm : 1,
+      socketSides,
+      figureAxes([extent.x, extent.y, extent.z]),
     )
     if (seats) {
       dbg.__ARTIC_SEATS = seats.map((s) => ({
@@ -1096,7 +1434,13 @@ async function cutManifoldNormalized(
       ) ?? parts[0].clone()
   }
 
-  return { cut: cutGeo, parts: parts.length ? parts : [cutGeo.clone()], warnings }
+  return {
+    cut: cutGeo,
+    parts: parts.length ? parts : [cutGeo.clone()],
+    warnings,
+    notes,
+    socketSides,
+  }
 }
 
 export async function cutWithManifold(
@@ -1129,8 +1473,9 @@ export async function cutWithManifold(
         cut,
         parts,
         warnings: [
-          'Manifold could not read this mesh, so the fallback cutter was used: parts are split but have NO ball/socket joints. Repair the mesh (Simplify, or Blender → Make Manifold) and preview again.',
+          'Manifold could not read this mesh, so the fallback cutter was used: parts are split but have NO joint hardware. Repair the mesh (Simplify, or Blender → Make Manifold) and preview again.',
         ],
+        notes: [],
       }
     } catch (fallbackErr) {
       const a =

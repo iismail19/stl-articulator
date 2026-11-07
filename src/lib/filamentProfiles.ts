@@ -30,7 +30,11 @@ export interface FilamentProfile {
   tested: boolean
 }
 
-/** Locked PLA print-test values — do not change without reprinting the test square. */
+/**
+ * Locked PLA print-test values — do not change without reprinting the test square.
+ * ISOLATION: ball snap only. Hinge / swivel / universal numbers live in their
+ * own profile modules and must not write here.
+ */
 export const PLA_VALIDATED = {
   socketClearance: 1.05,
   mouthRatio: 0.955,

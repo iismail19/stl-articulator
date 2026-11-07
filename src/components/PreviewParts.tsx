@@ -32,7 +32,6 @@ export function PreviewParts({ parts, explode }: PreviewPartsProps) {
     for (const c of centroids) center.add(c)
     if (centroids.length) center.multiplyScalar(1 / centroids.length)
 
-    // Scale explode by model size so it feels right on tiny/large STLs
     let maxR = 0
     for (const c of centroids) {
       maxR = Math.max(maxR, c.distanceTo(center))
@@ -46,7 +45,6 @@ export function PreviewParts({ parts, explode }: PreviewPartsProps) {
     return centroids.map((c, i) => {
       const dir = c.clone().sub(center)
       if (dir.lengthSq() < 1e-12) {
-        // Stacked/coincident — fan out in a ring
         const a = (i / Math.max(parts.length, 1)) * Math.PI * 2
         dir.set(Math.cos(a), 0.15, Math.sin(a))
       }

@@ -3,6 +3,15 @@ import {
   FILAMENT_PROFILES,
   type FilamentType,
 } from '../lib/filamentProfiles'
+import {
+  JOINT_KIND_ORDER,
+  JOINT_KINDS,
+  bendsOnOneAxis,
+  getJointKind,
+  kindBadge,
+  type JointKind,
+} from '../lib/jointKinds'
+import { figureAxes } from '../lib/cutterGeometry'
 import type { CutAxis, Joint, ModelInfo } from '../types'
 import { formatSize } from '../lib/stlIO'
 
@@ -19,6 +28,8 @@ interface SidebarProps {
   explode: number
   filament: FilamentType
   onFilamentChange: (f: FilamentType) => void
+  jointKind: JointKind
+  onJointKindChange: (k: JointKind) => void
   simplifyStrength: SimplifyStrength
   canUndoSimplify: boolean
   onLoadFile: (file: File) => void
@@ -40,6 +51,21 @@ interface SidebarProps {
   onExportCutters: () => void
   onExportBallHardware: () => void
   onExportParts: () => void
+}
+
+function KindBadge({ kind }: { kind: JointKind }) {
+  const badge = kindBadge(JOINT_KINDS[kind])
+  return badge ? (
+    <span className={`kind-badge kind-badge-${badge.tone}`} title={badge.title}>
+      {badge.text}
+    </span>
+  ) : null
+}
+
+function swapLabel(kind: JointKind | undefined): string {
+  if (kind === 'hinge') return 'hole and which gets the peg'
+  if (kind === 'knuckle') return 'fork and which gets the tongue'
+  return 'socket and which gets the ball'
 }
 
 function AxisButtons({
@@ -78,6 +104,8 @@ export function Sidebar({
   explode,
   filament,
   onFilamentChange,
+  jointKind,
+  onJointKindChange,
   onLoadFile,
   onClearModel,
   onTogglePlace,
@@ -102,6 +130,8 @@ export function Sidebar({
 }: SidebarProps) {
   const selected = joints.find((j) => j.id === selectedId) ?? null
   const absoluteScaleMm = baseRadius * (selected?.scale ?? 1)
+  const upAxis = (model ? figureAxes(model.size).up : 'z').toUpperCase()
+  const activeKind = getJointKind(jointKind)
 
   return (
     <aside className="sidebar">
@@ -121,7 +151,9 @@ export function Sidebar({
             + Add → click a joint spot (size is automatic)
           </li>
           <li className={previewing ? 'done' : ''}>Preview Split Joints</li>
-          <li className={previewing ? 'highlight' : ''}>Download parts + ball joints</li>
+          <li className={previewing ? 'highlight' : ''}>
+            Download parts
+          </li>
         </ol>
         <p className="muted" style={{ marginTop: '0.35rem' }}>
           You only pick the point. The orange ring auto-sizes to that limb.
@@ -151,44 +183,15 @@ export function Sidebar({
           })}
         </div>
         <p className="filament-hint">{FILAMENT_PROFILES[filament].hint}</p>
-        <p className="muted" style={{ marginTop: '0.55rem' }}>
-          PLA test pair (Ø8 mm) — PLA and PLA+ both use this snap:
-        </p>
-        <div className="btn-row">
-          <a
-            className="btn btn-ghost btn-sm"
-            href="/test-joints/pla-ball-stem-v12.stl"
-            download
-          >
-            Ball + stem
-          </a>
-          <a
-            className="btn btn-ghost btn-sm"
-            href="/test-joints/pla-socket-v12.stl"
-            download
-          >
-            Socket
-          </a>
-        </div>
-        <p className="muted" style={{ marginTop: '0.55rem' }}>
-          Small-joint pair (Ø4 mm, face cut at 22° like an elbow):
-        </p>
-        <div className="btn-row">
-          <a
-            className="btn btn-ghost btn-sm"
-            href="/test-joints/pla-d4-angled-ball-stem-v12.stl"
-            download
-          >
-            Ball + stem
-          </a>
-          <a
-            className="btn btn-ghost btn-sm"
-            href="/test-joints/pla-d4-angled-socket-v12.stl"
-            download
-          >
-            Socket
-          </a>
-        </div>
+        <a
+          className="btn btn-ghost btn-tests"
+          href="/?page=tests"
+          target="_blank"
+          rel="noopener"
+          title="Opens in a new tab, so your model stays loaded here"
+        >
+          🧪 Test prints — every joint pair ↗
+        </a>
       </section>
 
       <section className="panel">
@@ -305,6 +308,51 @@ export function Sidebar({
         </section>
       )}
 
+      <section className="panel joint-kind-panel">
+        <h2>Joint type</h2>
+        <p className="muted">
+          For <strong>new</strong> markers only. Switching type never changes joints already
+          on the model — each marker keeps its own kind and settings.
+        </p>
+        <div className="axis-row joint-kind-row">
+          {JOINT_KIND_ORDER.map((id) => {
+            const profile = JOINT_KINDS[id]
+            return (
+              <button
+                key={id}
+                type="button"
+                className={`axis-btn ${jointKind === id ? 'active' : ''}`}
+                title={profile.useFor}
+                onClick={() => onJointKindChange(id)}
+              >
+                {profile.label}
+                <KindBadge kind={id} />
+              </button>
+            )
+          })}
+        </div>
+        <p className="filament-hint">{activeKind.hint}</p>
+        <ul className="joint-kind-guide">
+          <li>
+            <strong>Neck / shoulder / hip:</strong> ball &amp; socket — swings every way; needs
+            a thick spot.
+          </li>
+          <li>
+            <strong>Elbow / knee / ankle:</strong> knuckle — bends one way; best on thin limbs
+            and small figures.
+          </li>
+          <li>
+            <strong>Chunky elbow / knee:</strong> hinge — snap-disc look, needs a thicker limb.
+          </li>
+          <li>
+            <strong>Forearm / waist twist:</strong> swivel — not built yet.
+          </li>
+          <li>
+            <strong>Wrist / ankle, two ways:</strong> universal — not built yet.
+          </li>
+        </ul>
+      </section>
+
       <section className="panel">
         <div className="panel-head">
           <h2>Joints ({joints.length})</h2>
@@ -326,8 +374,8 @@ export function Sidebar({
         )}
 
         <p className="muted">
-          Click <strong>+ Add</strong>, then click the model at a shoulder, elbow, hip, or
-          knee. Size is automatic — you don’t set scale.
+          Click <strong>+ Add</strong>, then click the model. New markers use{' '}
+          <strong>{activeKind.label}</strong>. Size is automatic.
         </p>
         <button
           type="button"
@@ -355,8 +403,8 @@ export function Sidebar({
           <p className="muted">No joints yet — click + Add, then click a limb joint.</p>
         ) : (
           <ul className="joint-list">
-            {joints.map((j) => (
-              <li key={j.id}>
+            {joints.map((j, index) => (
+              <li key={`joint-${j.id}-${index}`}>
                 <button
                   type="button"
                   className={`joint-card ${j.id === selectedId ? 'selected' : ''}`}
@@ -364,6 +412,7 @@ export function Sidebar({
                 >
                   <span className="joint-title">
                     Joint #{j.id}{' '}
+                    <em className="axis-tag">{getJointKind(j.kind).label}</em>
                     <em className="axis-tag">{j.axis.toUpperCase()}</em>
                   </span>
                   <span className="joint-coords">
@@ -384,14 +433,38 @@ export function Sidebar({
         <section className="panel">
           <h2>Joint #{selected.id}</h2>
           <p className="muted success-note">
-            Auto-sized to this limb (r≈{absoluteScaleMm.toFixed(3)}). Drag the gizmo to
-            move — size updates automatically.
+            {getJointKind(selected.kind).label} · auto-sized to this limb
+            (r≈{absoluteScaleMm.toFixed(3)}). Drag the gizmo to move — size updates
+            automatically.
           </p>
 
+          <label className="field">
+            <span>This joint’s type — does not change other markers</span>
+            <div className="axis-row joint-kind-row">
+              {JOINT_KIND_ORDER.map((id) => {
+                const profile = JOINT_KINDS[id]
+                const current = getJointKind(selected.kind).id
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`axis-btn ${current === id ? 'active' : ''}`}
+                    title={profile.useFor}
+                    onClick={() => onUpdateJoint(selected.id, { kind: id })}
+                  >
+                    {profile.label}
+                    <KindBadge kind={id} />
+                  </button>
+                )
+              })}
+            </div>
+          </label>
+
           <p className="muted" style={{ marginTop: 0 }}>
-            STLs are Z-up: the neck is Axis <strong>Z</strong> (socket goes in the head).
-            Shoulders are usually Axis <strong>X</strong>; elbows on hanging arms are Axis{' '}
-            <strong>Z</strong>. Add a little Tilt so the arrow follows the limb. Wrists/ankles:
+            This model stands along <strong>{upAxis}</strong>: the neck is Axis{' '}
+            <strong>{upAxis}</strong> (socket goes in the head). Shoulders are usually Axis{' '}
+            <strong>X</strong>; elbows on hanging arms and knees are Axis <strong>{upAxis}</strong>.
+            Add a little Tilt so the arrow follows the limb. Wrists/ankles:
             click the thin middle, Recenter if off, then Tilt until the cut looks square to the
             limb.
           </p>
@@ -442,7 +515,12 @@ export function Sidebar({
           </fieldset>
 
           <label className="field">
-            <span>Twist around axis — {selected.rotation.toFixed(0)}° (moves the orange tick)</span>
+            <span>
+              Twist around axis — {selected.rotation.toFixed(0)}°{' '}
+              {bendsOnOneAxis(selected.kind)
+                ? '(turns the yellow pivot bar — the limb bends around it)'
+                : '(moves the orange tick)'}
+            </span>
             <input
               type="range"
               min={0}
@@ -459,13 +537,13 @@ export function Sidebar({
             <button
               type="button"
               className="btn btn-ghost"
+              aria-pressed={!!selected.swapSides}
               onClick={() =>
-                onUpdateJoint(selected.id, {
-                  rotation: (selected.rotation + 180) % 360,
-                })
+                onUpdateJoint(selected.id, { swapSides: !selected.swapSides })
               }
+              title={`Trade which part gets the ${swapLabel(selected.kind)}. The see-through ball on the marker shows where it goes.`}
             >
-              Flip 180°
+              Flip 180°{selected.swapSides ? ' (flipped)' : ''}
             </button>
             <button
               type="button"
@@ -533,9 +611,10 @@ export function Sidebar({
 
         <p className="muted what-it-does">
           <strong>What this does:</strong> at each marker, severs <em>only that joint</em>,
-          then puts a <em>ball on one part</em> and a <em>socket on the other</em>. You should
-          get a few body parts (arms/legs/torso) — not wafer slices. Place on shoulders,
-          elbows, hips, knees.
+          then adds hardware for that type — <em>ball &amp; socket</em>, a <em>hinge</em>{' '}
+          (peg molded on one part, hole in the other), or a <em>knuckle</em> (tongue in a
+          fork) — all snap together. You should get a few
+          body parts — not wafer slices.
         </p>
 
         {previewing ? (
@@ -572,7 +651,7 @@ export function Sidebar({
               disabled={busy || previewPartCount <= 1}
               onClick={onExportParts}
             >
-              Download Separate Body Parts
+              Download Parts
             </button>
             <button
               type="button"
