@@ -404,7 +404,7 @@ export function createJointCutter(
   return united
 }
 
-function tryMakeManifold(
+export function tryMakeManifold(
   Mesh: ManifoldApi['Mesh'],
   Manifold: ManifoldApi['Manifold'],
   geometry: THREE.BufferGeometry,

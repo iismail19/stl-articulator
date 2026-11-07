@@ -461,7 +461,7 @@ export default function App() {
     setError(null)
     try {
       await new Promise((r) => setTimeout(r, 0))
-      const { geometry: simplified, before, after } = await simplifyGeometry(
+      const { geometry: simplified, before, after, watertight } = await simplifyGeometry(
         geometry,
         { strength: simplifyStrength },
       )
@@ -481,11 +481,14 @@ export default function App() {
       setModel(info)
       setCanUndoSimplify(!!originalGeoRef.current)
       clearPreview()
-      setJoints([])
-      setSelectedId(null)
-      nextJointId = 1
+      const next = joints.length
+        ? `Your ${joints.length} marker(s) stay where they were. Next: Preview.`
+        : 'Next: Auto-Suggest Joints.'
       setInfoMsg(
-        `Simplified in-app: ${before.toLocaleString()} → ${after.toLocaleString()} triangles. Next: Auto-Suggest Joints.`,
+        `Simplified in-app: ${before.toLocaleString()} → ${after.toLocaleString()} triangles. ${next}` +
+          (watertight
+            ? ''
+            : ' This mesh already had holes, so it may still need repair (Blender → Make Manifold) before joints can be built.'),
       )
     } catch (err) {
       console.error(err)
@@ -494,7 +497,7 @@ export default function App() {
       setBusy(false)
       setProgress(null)
     }
-  }, [geometry, model, simplifyStrength, rebuildProbe, clearPreview])
+  }, [geometry, model, simplifyStrength, rebuildProbe, clearPreview, joints.length])
 
   const handleUndoSimplify = useCallback(() => {
     if (!originalGeoRef.current || !originalInfoRef.current) return
@@ -508,10 +511,7 @@ export default function App() {
     setModel({ ...originalInfoRef.current })
     setCanUndoSimplify(false)
     clearPreview()
-    setJoints([])
-    setSelectedId(null)
-    nextJointId = 1
-    setInfoMsg('Restored original unsimplified mesh.')
+    setInfoMsg('Restored the original mesh. Your markers stay where they were.')
   }, [rebuildProbe, clearPreview])
 
   const handleDownloadSimplified = useCallback(() => {
