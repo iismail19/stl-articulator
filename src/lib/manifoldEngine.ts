@@ -44,7 +44,7 @@ import {
   type KnuckleSpec,
 } from './knuckleProfile'
 import { splitConnectedComponents } from './splitMesh'
-import { buildBoreBody, buildPostBody, swivelBore, swivelCores } from './swivelGeometry'
+import { buildBoreBody, buildPostBody, postSlot, swivelBore, swivelCores } from './swivelGeometry'
 import {
   MIN_RELIABLE_POST_DIAMETER_MM,
   scaleSwivelSpec,
@@ -1117,7 +1117,11 @@ function applyBallAndSocket(
         const postHw = keep(Manifold.intersection(keep(buildPostBody(Manifold, S, depth)), postEnvelope))
         const boreHw = keep(Manifold.intersection(keep(buildBoreBody(Manifold, S, depth)), boreEnvelope))
 
-        const postFinal = Manifold.union([postLocal, postHw])
+        // Slot again after the union so limb material can't fill it.
+        const postFinal = Manifold.difference(
+          keep(Manifold.union([postLocal, postHw])),
+          keep(postSlot(Manifold, S, depth)),
+        )
         // Bore last so limb material can never plug the hole.
         const boreFinal = Manifold.difference(
           keep(Manifold.union([boreLocal, boreHw])),
@@ -1129,7 +1133,7 @@ function applyBallAndSocket(
         result[boreIdx] = toWorld(boreFinal, cx, cy)
         result[postIdx] = toWorld(postFinal, cx, cy)
         note(
-          `Joint #${joint.id} swivel: snap post (Ø${postMm.toFixed(1)} mm) is molded onto one part — push it into the other part's hole until it clicks. It turns all the way round. No separate pin, no glue.`,
+          `Joint #${joint.id} swivel: snap post (Ø${postMm.toFixed(1)} mm) is molded onto one part — push it into the other part's hole until it clicks. It turns all the way round. No separate pin, no glue. Print the hole part with the hole facing down if you can — the catch edge comes out crisper.`,
         )
         const dbg = globalThis as ArticDebug
         if (dbg.__ARTIC_DEBUG) {

@@ -18,7 +18,12 @@
  * NOT PRINT-TESTED YET: print the swivel test pair first.
  */
 export const SWIVEL_TEST = {
-  version: 'v1',
+  /**
+   * v1 (0.2 mm lip, bore printed hole-up) clicked in but popped out when twisted:
+   * the lip's ledge was an overhang and printed rounded. v2 prints the bore
+   * hole-down so the ledge is a crisp top layer, and deepens the lip.
+   */
+  version: 'v2',
   /** Collar radius — the round face both parts share at the cut. */
   collarRadius: 4,
   /** Material the post passes through before its lip snaps out behind it. */
@@ -27,7 +32,9 @@ export const SWIVEL_TEST = {
   /** Hole Ø = post Ø + this. Small = stiffer turn. */
   holeClearance: 0.1,
   /** Radial lip on the post tip that snaps past the hole. */
-  lipMm: 0.2,
+  lipMm: 0.3,
+  /** 45° chamfer at the hole's mouth: lead-in, and room for first-layer squish. */
+  entryChamfer: 0.3,
   /** Tapered lead-in past the hole. */
   lipLength: 0.9,
   /** Lip shoulder sits this far short of the hole's end, so it clamps the collars together. */
@@ -50,6 +57,7 @@ export type SwivelSpec = {
   lipLength: number
   shoulderPreload: number
   splitWidth: number
+  entryChamfer: number
 }
 
 /**
@@ -80,6 +88,7 @@ export function swivelTestSpec(): SwivelSpec {
     lipLength: SWIVEL_TEST.lipLength,
     shoulderPreload: SWIVEL_TEST.shoulderPreload,
     splitWidth: SWIVEL_TEST.splitWidth,
+    entryChamfer: SWIVEL_TEST.entryChamfer,
   }
 }
 
@@ -98,10 +107,11 @@ export function swivelDimsForRoom(roomMm: number): SwivelSpec | null {
     boreDepth: Math.max(Math.min(SWIVEL_TEST.boreDepth * s, SWIVEL_TEST.boreDepth * 1.5), 1.2),
     postDiameter,
     holeClearance: SWIVEL_TEST.holeClearance,
-    lipMm: Math.min(SWIVEL_TEST.lipMm, postDiameter * 0.08),
+    lipMm: Math.min(SWIVEL_TEST.lipMm, postDiameter * 0.1),
     lipLength: Math.max(Math.min(SWIVEL_TEST.lipLength * s, SWIVEL_TEST.lipLength * 1.5), 0.5),
     shoulderPreload: SWIVEL_TEST.shoulderPreload,
     splitWidth: Math.min(SWIVEL_TEST.splitWidth, postDiameter * 0.25),
+    entryChamfer: Math.min(SWIVEL_TEST.entryChamfer, postDiameter * 0.1),
   }
 }
 
@@ -115,5 +125,6 @@ export function scaleSwivelSpec(S: SwivelSpec, k: number): SwivelSpec {
     lipLength: S.lipLength * k,
     shoulderPreload: S.shoulderPreload * k,
     splitWidth: S.splitWidth * k,
+    entryChamfer: S.entryChamfer * k,
   }
 }

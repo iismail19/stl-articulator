@@ -42,17 +42,27 @@ export function buildPostBody(Manifold: ManifoldClass, S: SwivelSpec, reach: num
     cylZ(Manifold, L.shoulderZ, Math.min(0.4, reach * 0.3), L.postR),
     cylZ(Manifold, L.tipZ, L.shoulderZ, tipR, L.lipR),
   ])
-  // Slot across the post so its halves squeeze through the hole, then spring back.
-  const slotY = L.lipR + 0.5
-  const slot = Manifold.cube([S.splitWidth, slotY * 2, -0.3 - (L.tipZ - 1)], false).translate([
-    -S.splitWidth / 2,
-    -slotY,
-    L.tipZ - 1,
-  ])
+  const slot = postSlot(Manifold, S, reach)
   const out = Manifold.difference(body, slot)
   del(body)
   del(slot)
   return out
+}
+
+/**
+ * Slot across the post so its halves squeeze through the hole, then spring back.
+ * It runs up into the collar so the halves are long enough to flex past the lip
+ * without cracking. The model cut subtracts it again after joining the limb.
+ */
+export function postSlot(Manifold: ManifoldClass, S: SwivelSpec, reach: number): Solid {
+  const L = swivelLayout(S)
+  const slotY = L.lipR + 0.5
+  const top = Math.min(S.postDiameter * 0.6, reach * 0.5)
+  return Manifold.cube([S.splitWidth, slotY * 2, top - (L.tipZ - 1)], false).translate([
+    -S.splitWidth / 2,
+    -slotY,
+    L.tipZ - 1,
+  ])
 }
 
 /** Collar reaching down to z = −`reach`. The hole is cut separately (`swivelBore`). */
@@ -60,11 +70,13 @@ export function buildBoreBody(Manifold: ManifoldClass, S: SwivelSpec, reach: num
   return cylZ(Manifold, -reach, 0, S.collarRadius)
 }
 
-/** Hole through the collar plus the pocket below it that the lip opens into. */
+/** Hole through the collar, a chamfered mouth, and the pocket below that the lip opens into. */
 export function swivelBore(Manifold: ManifoldClass, S: SwivelSpec): Solid {
   const L = swivelLayout(S)
+  const c = S.entryChamfer
   return unite(Manifold, [
     cylZ(Manifold, -S.boreDepth - 0.01, 0.01, L.holeR),
+    cylZ(Manifold, -c, 0.01, L.holeR, L.holeR + c + 0.01),
     cylZ(Manifold, L.pocketZ, -S.boreDepth, L.lipR + 0.3),
   ])
 }

@@ -94,25 +94,27 @@ The Dag 4″ elbows come out within 5% of the standard pair, so the standard pai
 Regenerate: `npx tsx scripts/gen-knuckle-test-joint.mts --robot ~/Downloads/Dag_natural_happy_4inch.stl --name dag4`
 (without `--robot`, only the standard pair)
 
-## Swivel test — snap post (v1)
+## Swivel test — snap post (v2)
 
 For a forearm or waist twist. **Two parts, no separate pin.** It's the print-tested hinge snap turned to point along the limb: a split post on one part clicks into a hole in the other, turns all the way round, and its lip clamps the two collar faces together so the twist holds. The same post and hole are molded into the body parts when you pick Swivel on a model.
 
 **Needs a test print 🟡**
 
+**v1 result (PLA, 2026-11-07):** it clicked in, but popped out when twisted. Its bore printed hole-up, so the ledge the lip hooks behind was an overhang and came out rounded; turning let the lip ride up over it. v2 fixes the print, not just the numbers.
+
 | File | What |
 |------|------|
-| `swivel-post-v1.stl` | Ø8 mm collar with a split Ø3 mm post. The post tip has a 0.2 mm lip. |
-| `swivel-bore-v1.stl` | Ø8 mm collar with a Ø3.1 mm hole, 2.6 mm deep, and a pocket below it for the lip. |
+| `swivel-post-v2.stl` | Ø8 mm collar with a split Ø3 mm post. The post tip has a 0.3 mm lip; the split runs up into the collar so the halves flex without cracking. |
+| `swivel-bore-v2.stl` | Ø8 mm collar with a Ø3.1 mm hole, 2.6 mm deep, a 0.3 mm chamfer at its mouth, and a pocket past it for the lip. |
 
-**Starting fit (copied from the tested hinge):**
-- Post Ø**3.0 mm**, hole Ø**3.1 mm**
-- Lip Ø**3.4 mm**, 0.7 mm split
+**Fit:**
+- Post Ø**3.0 mm**, hole Ø**3.1 mm** (from the tested hinge)
+- Lip Ø**3.6 mm** (v1: 3.4), 0.7 mm split
 - The lip shoulder sits **0.05 mm** short of the end of the hole, so it clamps the two collar faces together. That face rub holds the twist.
 
 **Print**
 - Post part: lying on its small flat, as exported. The post prints sideways, so its layers run along it (like the hinge stud printed upright).
-- Bore part: standing on its end, hole opening up, as exported, so the hole prints round.
+- Bore part: hole facing **down** on the bed, as exported. The ledge the lip hooks behind is then a crisp top layer; the pocket roof is a short bridge. The chamfer keeps first-layer squish out of the hole's mouth.
 - 0.2 mm layers, 3–4 walls. No supports.
 
 Push the post into the hole until it clicks. It should turn all the way round by hand and stay where you leave it.

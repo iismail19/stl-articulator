@@ -5,7 +5,9 @@
  *   npx tsx scripts/gen-swivel-test-joint.mts
  *
  * Post part lies on its side on a small flat, post sideways (layers run along it).
- * Bore part stands on its end, hole opening up, so the hole prints round.
+ * Bore part stands with its hole opening DOWN on the bed (v2): the ledge the lip
+ * hooks behind prints as a crisp top layer. v1 printed it hole-up and the post
+ * popped out when twisted.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -94,8 +96,9 @@ async function main() {
   const postFlat = shaved.translate([0, 0, S.collarRadius - flat])
   shaved.delete()
 
-  // Bore part: stands on its far end, hole opening up.
-  const boreUp = bore.translate([0, 0, reach])
+  // Bore part: hole opening down on the bed. The ledge the lip hooks behind is
+  // then a crisp top layer, not an overhang; the pocket roof is a short bridge.
+  const boreUp = bore.rotate([180, 0, 0])
   bore.delete()
 
   fs.mkdirSync(outDir, { recursive: true })

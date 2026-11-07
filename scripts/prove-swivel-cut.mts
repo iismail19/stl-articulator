@@ -115,8 +115,13 @@ async function run(c: Case) {
   }
 
   // The cut gap inside the collar is filled: a thin slab across the joint is mostly material.
+  // The post's split runs up into the collar on purpose; leave it out of the probe.
   const probeR = spec.collarRadius * 0.8 * k
-  const probe = Manifold.cylinder(0.6 * k * 2, probeR, probeR, 48, true)
+  const disk = Manifold.cylinder(0.6 * k * 2, probeR, probeR, 48, true)
+  const slotOut = Manifold.cube([spec.splitWidth * k, (L.lipR + 0.5) * 2 * k, 10 * k], true)
+  const probe = Manifold.difference(disk, slotOut)
+  disk.delete()
+  slotOut.delete()
   const filled = solids.reduce((sum, sol) => {
     const hit = Manifold.intersection(sol, probe)
     const v = vol(hit)
