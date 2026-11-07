@@ -5,7 +5,7 @@ export type { JointKind }
 /**
  * Articulation styles the user can pick per marker.
  * All kinds are selectable. `tested` is a label only — ball, hinge and knuckle
- * are confirmed by real prints; swivel and universal are not built.
+ * are confirmed by real prints; swivel is built but untested; universal is not built.
  *
  * AC: editing or testing one kind must not rewrite markers or fit numbers of
  * another kind. Placement default ≠ per-marker kind; profiles stay in separate
@@ -73,15 +73,15 @@ export const JOINT_KINDS: Record<JointKind, JointKindProfile> = {
     id: 'swivel',
     label: 'Swivel',
     useFor: 'Forearm twist or waist turn',
-    hint: 'Not built yet — you can place a marker, but Preview only cuts. Use Ball, Hinge or Knuckle for working hardware.',
+    hint: 'Snap post along the limb: a split post molded on one part clicks into a hole in the other and turns all the way round; its lip clamps the faces so the twist holds. No separate pin. Not print-tested yet — print the test pair first.',
     tested: false,
-    status: 'notBuilt',
+    status: 'untested',
   },
   universal: {
     id: 'universal',
     label: 'Universal',
     useFor: 'Wrist and ankle — two bend axes',
-    hint: 'Not built yet — you can place a marker, but Preview only cuts. Use Ball, Hinge or Knuckle for working hardware.',
+    hint: 'Not built yet — you can place a marker, but Preview only cuts. Use Ball, Hinge, Knuckle or Swivel for working hardware.',
     tested: false,
     status: 'notBuilt',
   },

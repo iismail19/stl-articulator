@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { HINGE_TEST } from '../lib/hingeProfile'
 import { KNUCKLE_TEST } from '../lib/knuckleProfile'
 import { stlThumbnail } from '../lib/stlThumbnail'
+import { SWIVEL_TEST } from '../lib/swivelProfile'
 
 interface Piece {
   label: string
@@ -81,6 +82,21 @@ const TESTS: TestPair[] = [
     ],
     howTo:
       'Stud upright, arm end down, with a brim: the peg prints sideways, so its layers run along it and it’s stronger. Eye flat, as exported. Press the peg through the hole until it clicks; the lip clamps the discs so the bend holds.',
+  },
+  {
+    title: 'Swivel — snap post',
+    kind: 'Swivel',
+    tested: false,
+    summary:
+      'Forearm or waist twist. The hinge’s tested snap turned to point along the limb: a split Ø3 mm post on one Ø8 mm collar, a hole in the other. Turns all the way round.',
+    pieces: [
+      { label: 'Post', file: `swivel-post-${SWIVEL_TEST.version}.stl` },
+      { label: 'Bore (hole)', file: `swivel-bore-${SWIVEL_TEST.version}.stl` },
+    ],
+    howTo:
+      'As exported: post part lying on its small flat (post sideways, like the hinge stud), bore part standing with the hole up. No supports. Push the post into the hole until it clicks.',
+    check:
+      'Does the post click in without cracking? Does it turn smoothly all the way round? Does it stay where you twist it, or spin loose?',
   },
 ]
 

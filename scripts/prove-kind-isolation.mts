@@ -7,6 +7,7 @@
 import { PLA_VALIDATED } from '../src/lib/filamentProfiles.ts'
 import { HINGE_TEST } from '../src/lib/hingeProfile.ts'
 import { KNUCKLE_TEST } from '../src/lib/knuckleProfile.ts'
+import { SWIVEL_TEST } from '../src/lib/swivelProfile.ts'
 import { hintToJoint, type LocalJointHint } from '../src/lib/meshProbe.ts'
 import { normalizeJointKind } from '../src/lib/jointKinds.ts'
 import type { Joint } from '../src/types.ts'
@@ -62,6 +63,30 @@ ok(
 )
 ;(PLA_VALIDATED as { mouthRatio: number }).mouthRatio = snapBefore.mouthRatio
 ;(HINGE_TEST as { shoulderPreload: number }).shoulderPreload = hingeBefore.shoulderPreload
+
+const swivelBefore = { ...SWIVEL_TEST }
+;(SWIVEL_TEST as { shoulderPreload: number }).shoulderPreload = 0.99
+;(SWIVEL_TEST as { holeClearance: number }).holeClearance = 0.99
+ok(
+  'swivel edit leaves ball, hinge and knuckle untouched',
+  PLA_VALIDATED.socketClearance === snapBefore.socketClearance &&
+    PLA_VALIDATED.mouthRatio === snapBefore.mouthRatio &&
+    HINGE_TEST.shoulderPreload === hingeBefore.shoulderPreload &&
+    HINGE_TEST.holeClearance === hingeBefore.holeClearance &&
+    KNUCKLE_TEST.preload === knuckleBefore.preload,
+)
+;(SWIVEL_TEST as { shoulderPreload: number }).shoulderPreload = swivelBefore.shoulderPreload
+;(SWIVEL_TEST as { holeClearance: number }).holeClearance = swivelBefore.holeClearance
+;(HINGE_TEST as { shoulderPreload: number }).shoulderPreload = 0.99
+;(KNUCKLE_TEST as { preload: number }).preload = 0.99
+ok(
+  'hinge and knuckle edits leave SWIVEL_TEST untouched',
+  SWIVEL_TEST.shoulderPreload === swivelBefore.shoulderPreload &&
+    SWIVEL_TEST.holeClearance === swivelBefore.holeClearance &&
+    SWIVEL_TEST.postDiameter === swivelBefore.postDiameter,
+)
+;(HINGE_TEST as { shoulderPreload: number }).shoulderPreload = hingeBefore.shoulderPreload
+;(KNUCKLE_TEST as { preload: number }).preload = knuckleBefore.preload
 
 ok('profiles are separate modules', HINGE_TEST.pegDiameter !== undefined)
 ok('ball snap key absent from hinge', !('socketClearance' in HINGE_TEST))

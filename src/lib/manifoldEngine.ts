@@ -44,6 +44,13 @@ import {
   type KnuckleSpec,
 } from './knuckleProfile'
 import { splitConnectedComponents } from './splitMesh'
+import { buildBoreBody, buildPostBody, swivelBore, swivelCores } from './swivelGeometry'
+import {
+  MIN_RELIABLE_POST_DIAMETER_MM,
+  scaleSwivelSpec,
+  swivelDimsForRoom,
+  type SwivelSpec,
+} from './swivelProfile'
 
 export type { FilamentType }
 
@@ -763,7 +770,7 @@ function applyBallAndSocket(
 
   for (const joint of joints) {
     const kind = normalizeJointKind(joint.kind)
-    if (kind === 'swivel' || kind === 'universal') {
+    if (kind === 'universal') {
       warn(
         `Joint #${joint.id}: ${getJointKind(kind).label} is not built yet — only the cut ran. Use Ball, Hinge or Knuckle for working hardware.`,
       )
@@ -1038,6 +1045,108 @@ function applyBallAndSocket(
       continue
     }
 
+    if (kind === 'swivel') {
+      const owned: ManifoldSolid[] = []
+      const keep = (s: ManifoldSolid) => {
+        owned.push(s)
+        return s
+      }
+      try {
+        // Bore on the primary (−Z in local after flip), post on the secondary (+Z).
+        const boreIdx = roles.primaryIdx
+        const postIdx = roles.secondaryIdx
+        const rawBore = keep(localize(result[boreIdx]))
+        const rawPost = keep(localize(result[postIdx]))
+
+        const reach = jR * 2.2
+        const depth = jR * 0.9
+        const rawBoreChunk = keep(
+          Manifold.intersection(
+            rawBore,
+            keep(Manifold.cube([reach * 2, reach * 2, depth], false).translate([-reach, -reach, -depth])),
+          ),
+        )
+        const rawPostChunk = keep(
+          Manifold.intersection(
+            rawPost,
+            keep(Manifold.cube([reach * 2, reach * 2, depth], false).translate([-reach, -reach, 0])),
+          ),
+        )
+        if (rawBoreChunk.isEmpty() || rawPostChunk.isEmpty()) {
+          warn(`Joint #${joint.id}: no limb on one side of the swivel — no swivel hardware. Move the marker onto the limb.`)
+          continue
+        }
+        // Turn about the middle of the material both limbs share at the cut.
+        const bb = rawBoreChunk.boundingBox()
+        const pb = rawPostChunk.boundingBox()
+        const mid = (i: number) =>
+          (Math.max(bb.min[i], pb.min[i]) + Math.min(bb.max[i], pb.max[i])) / 2
+        const cx = mid(0)
+        const cy = mid(1)
+        const centered = (s: ManifoldSolid) => keep(s.translate([-cx, -cy, 0]))
+        const boreLocal = centered(rawBore)
+        const postLocal = centered(rawPost)
+        const boreChunk = centered(rawBoreChunk)
+        const postChunk = centered(rawPostChunk)
+        const room = (m: ManifoldSolid) => {
+          const b = m.boundingBox()
+          return Math.min(-b.min[0], b.max[0], -b.min[1], b.max[1])
+        }
+        const roomMm = Math.min(room(boreChunk), room(postChunk)) / mmToNorm
+        const fitted = roomMm > 0 ? swivelDimsForRoom(roomMm) : null
+        if (!fitted) {
+          warn(`Joint #${joint.id}: limb is too thin here for a swivel — use Ball, or scale the model up.`)
+          continue
+        }
+        const postMm = fitted.postDiameter
+        if (postMm < MIN_RELIABLE_POST_DIAMETER_MM) {
+          const pct = Math.ceil((MIN_RELIABLE_POST_DIAMETER_MM / postMm) * 100)
+          caution(
+            `Joint #${joint.id}: swivel post is only Ø${postMm.toFixed(1)} mm — may be fragile. Scaling the whole model to ${pct}% gives a Ø${MIN_RELIABLE_POST_DIAMETER_MM} mm post.`,
+          )
+        }
+        const S = scaleSwivelSpec(fitted, mmToNorm)
+
+        // Hardware is clipped to each limb's own outline (hull of the limb end + collar),
+        // so the collars fill the cut gap but never poke out of the surface.
+        const cores = swivelCores(Manifold, S)
+        keep(cores.post)
+        keep(cores.bore)
+        const postEnvelope = keep(Manifold.hull([postChunk, cores.post]))
+        const boreEnvelope = keep(Manifold.hull([boreChunk, cores.bore]))
+        const postHw = keep(Manifold.intersection(keep(buildPostBody(Manifold, S, depth)), postEnvelope))
+        const boreHw = keep(Manifold.intersection(keep(buildBoreBody(Manifold, S, depth)), boreEnvelope))
+
+        const postFinal = Manifold.union([postLocal, postHw])
+        // Bore last so limb material can never plug the hole.
+        const boreFinal = Manifold.difference(
+          keep(Manifold.union([boreLocal, boreHw])),
+          keep(swivelBore(Manifold, S)),
+        )
+
+        deleteSafe(result[boreIdx])
+        deleteSafe(result[postIdx])
+        result[boreIdx] = toWorld(boreFinal, cx, cy)
+        result[postIdx] = toWorld(postFinal, cx, cy)
+        note(
+          `Joint #${joint.id} swivel: snap post (Ø${postMm.toFixed(1)} mm) is molded onto one part — push it into the other part's hole until it clicks. It turns all the way round. No separate pin, no glue.`,
+        )
+        const dbg = globalThis as ArticDebug
+        if (dbg.__ARTIC_DEBUG) {
+          ;(dbg.__ARTIC_SWIVELS ??= []).push({ jointId: joint.id, spec: fitted })
+        }
+        console.log(
+          `  Joint #${joint.id}: swivel bore=part${boreIdx} post=part${postIdx} collarR=${fitted.collarRadius.toFixed(2)}mm post=${postMm.toFixed(2)}mm`,
+        )
+      } catch (err) {
+        console.warn(err)
+        warn(`Joint #${joint.id}: swivel boolean failed — limb stays cut with no swivel hardware.`)
+      } finally {
+        for (const s of owned) deleteSafe(s)
+      }
+      continue
+    }
+
     // —— ball & socket ——
     const socketIdx = roles.primaryIdx
     const ballIdx = roles.secondaryIdx
@@ -1133,6 +1242,8 @@ type ArticDebug = {
   __ARTIC_SEATS?: JointSeatRecord[]
   /** Knuckle specs as built, in mm (or print-at-100 mm units). */
   __ARTIC_KNUCKLES?: { jointId: number; spec: KnuckleSpec }[]
+  /** Swivel specs as built, in mm (or print-at-100 mm units). */
+  __ARTIC_SWIVELS?: { jointId: number; spec: SwivelSpec }[]
 }
 
 export type CutResult = {

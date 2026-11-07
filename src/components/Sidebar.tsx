@@ -345,7 +345,8 @@ export function Sidebar({
             <strong>Chunky elbow / knee:</strong> hinge — snap-disc look, needs a thicker limb.
           </li>
           <li>
-            <strong>Forearm / waist twist:</strong> swivel — not built yet.
+            <strong>Forearm / waist twist:</strong> swivel — turns all the way round; print
+            its test pair first.
           </li>
           <li>
             <strong>Wrist / ankle, two ways:</strong> universal — not built yet.
