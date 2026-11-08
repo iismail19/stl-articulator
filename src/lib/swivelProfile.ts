@@ -4,9 +4,10 @@
  * lip clamps the two collar faces together, and that face rub holds the twist.
  * No separate pin.
  *
- * The snap is the print-tested hinge snap (v3) turned to point along the limb:
- * same clearance, lip, preload and split. The numbers are copied, not imported,
- * so tuning the swivel can never move the locked hinge.
+ * The snap started from the print-tested hinge snap (v3), pointed along the limb.
+ * The numbers are copied, not imported, so the locked hinge never moves. The lip
+ * is deeper than the hinge's: a twist pulls along the post, and the print test
+ * needed the extra catch.
  *
  * ISOLATION: the only place swivel fit numbers live. Editing them never touches
  * the ball (`filamentProfiles.ts`), hinge (`hingeProfile.ts`) or knuckle
@@ -15,7 +16,9 @@
  * Fit numbers are absolute mm (printer tolerance does not scale with the model).
  * Shape scales with the limb.
  *
- * NOT PRINT-TESTED YET: print the swivel test pair first.
+ * LOCKED: v2 passed its PLA print test (2026-11-07), bore printed hole-down.
+ * prove-swivel-locked.mts fails if these numbers, the test pair, or a model
+ * swivel cut change. v1 (0.2 mm lip, hole-up) popped out when twisted.
  */
 export const SWIVEL_TEST = {
   /**

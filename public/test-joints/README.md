@@ -98,9 +98,9 @@ Regenerate: `npx tsx scripts/gen-knuckle-test-joint.mts --robot ~/Downloads/Dag_
 
 For a forearm or waist twist. **Two parts, no separate pin.** It's the print-tested hinge snap turned to point along the limb: a split post on one part clicks into a hole in the other, turns all the way round, and its lip clamps the two collar faces together so the twist holds. The same post and hole are molded into the body parts when you pick Swivel on a model.
 
-**Needs a test print 🟡**
+**Print-tested ✅ (PLA, 2026-11-07). Locked by `scripts/prove-swivel-locked.mts`.**
 
-**v1 result (PLA, 2026-11-07):** it clicked in, but popped out when twisted. Its bore printed hole-up, so the ledge the lip hooks behind was an overhang and came out rounded; turning let the lip ride up over it. v2 fixes the print, not just the numbers.
+**v1** (0.2 mm lip, bore printed hole-up) clicked in but popped out when twisted: the ledge the lip hooks behind was an overhang and came out rounded. **v2** prints the bore hole-down, so that ledge is a crisp top layer, and deepens the lip to 0.3 mm. The user: "so much better."
 
 | File | What |
 |------|------|

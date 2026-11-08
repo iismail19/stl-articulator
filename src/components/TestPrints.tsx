@@ -86,17 +86,15 @@ const TESTS: TestPair[] = [
   {
     title: 'Swivel — snap post',
     kind: 'Swivel',
-    tested: false,
+    tested: true,
     summary:
-      'Forearm or waist twist. A split Ø3 mm post on one Ø8 mm collar clicks into a hole in the other and turns all the way round. v2: deeper 0.3 mm lip, longer split, and the hole part prints hole-down so the catch edge comes out crisp (v1 popped out when twisted).',
+      'Forearm or waist twist. A split Ø3 mm post on one Ø8 mm collar clicks into a hole in the other and turns all the way round. Print-tested: stays in when twisted and holds a pose. The hole part prints hole-down so the catch edge stays crisp.',
     pieces: [
       { label: 'Post', file: `swivel-post-${SWIVEL_TEST.version}.stl` },
       { label: 'Bore (hole)', file: `swivel-bore-${SWIVEL_TEST.version}.stl` },
     ],
     howTo:
       'As exported: post part lying on its small flat (post sideways, like the hinge stud), bore part standing with the hole DOWN on the bed. No supports. Push the post into the hole until it clicks.',
-    check:
-      'Does the post click in without cracking? Does it stay in when you twist it? Does it turn all the way round and hold where you leave it?',
   },
 ]
 

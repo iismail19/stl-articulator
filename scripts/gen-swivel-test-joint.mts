@@ -2,6 +2,8 @@
  * Swivel print test: post part (split snap post) + bore part (hole). No separate pin.
  * Geometry comes from src/lib/swivelGeometry.ts — the same code the model cut uses.
  *
+ * Print-tested and LOCKED (prove-swivel-locked.mts).
+ *
  *   npx tsx scripts/gen-swivel-test-joint.mts
  *
  * Post part lies on its side on a small flat, post sideways (layers run along it).

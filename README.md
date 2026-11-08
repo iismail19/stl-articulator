@@ -19,7 +19,7 @@ Free browser tool that turns a solid STL figure into a poseable one: it cuts the
 | **Ball & socket** | Swings any direction and twists | Neck, shoulders, hips: thick spots that need the most freedom | Room for a ball of at least Ø4 mm plus its socket wall | Print-tested ✅ (PLA / PLA+) |
 | **Knuckle** | Bends one way (about ±90°), like a toy robot. A rounded tongue sits in a fork; molded bumps snap into dimples and pinch to hold the pose | Elbows, knees, ankles on robots and thin limbs: the best choice for small (3–4″) figures | A tongue at least 2 mm thick (warns below that) | Print-tested ✅ (PLA): standard 9 mm and thin 6.8 mm knee size |
 | **Hinge** | Bends one way. A peg molded on one disc snaps through a hole in the other | Elbows and knees on chunkier limbs, or where a flat, disc-style joint looks right | A peg at least Ø2.4 mm (warns below that) | Print-tested ✅ (PLA). Print the peg part upright so the peg's layers run along it |
-| **Swivel** | Twists all the way round the limb. A split post molded on one part clicks into a hole in the other (the hinge's snap, pointed along the limb) | Forearm or waist twist | A post at least Ø2.4 mm (warns below that) | Needs a test print 🟡 |
+| **Swivel** | Twists all the way round the limb. A split post molded on one part clicks into a hole in the other | Forearm or waist twist | A post at least Ø2.4 mm (warns below that) | Print-tested ✅ (PLA). Print the hole part hole-down so the catch edge stays crisp |
 | **Universal** | Bends two ways on a thin limb | Wrists, ankles | — | Not built yet (cut only) |
 
 **Rules of thumb**
@@ -64,6 +64,7 @@ npx tsx scripts/prove-simplify.mts       # Simplify Mesh keeps the model waterti
 npx tsx scripts/prove-knuckle-cut.mts
 npx tsx scripts/prove-hinge-cut.mts
 npx tsx scripts/prove-swivel-cut.mts
+npx tsx scripts/prove-swivel-locked.mts  # swivel identical to the print-tested pair
 npx tsx scripts/prove-flip.mts
 npx tsx scripts/prove-marker-side.mts    # marker shows the side the cut really uses
 npx tsx scripts/prove-figure-suggest.mts
